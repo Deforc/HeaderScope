@@ -1,4 +1,4 @@
-name: Scanner
+name: Scanner and reports
 
 on: [push, pull_request]
 
@@ -20,5 +20,5 @@ jobs:
           -DClang_DIR=/usr/lib/llvm-18/lib/cmake/clang
       - name: Build
         run: cmake --build build-core --parallel 2
-      - name: Test scanner
+      - name: Test scanner and reports
         run: ctest --test-dir build-core --output-on-failure

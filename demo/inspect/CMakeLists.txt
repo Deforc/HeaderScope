@@ -1,2 +1,11 @@
-add_executable(headerscope_inspect main.cpp)
-target_link_libraries(headerscope_inspect PRIVATE HeaderScope::scanner HeaderScope::graph)
+find_package(LLVM REQUIRED CONFIG)
+add_executable(headerscope_inspect main.cpp snapshot.cpp)
+target_include_directories(headerscope_inspect SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_link_libraries(headerscope_inspect PRIVATE HeaderScope::scanner HeaderScope::graph LLVMSupport)
+
+if(BUILD_TESTING)
+    add_executable(headerscope_report_tests tests.cpp snapshot.cpp)
+    target_include_directories(headerscope_report_tests SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(headerscope_report_tests PRIVATE HeaderScope::graph LLVMSupport)
+    add_test(NAME reports COMMAND headerscope_report_tests)
+endif()
