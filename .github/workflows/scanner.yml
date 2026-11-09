@@ -1,0 +1,51 @@
+name: Scanner
+
+on:
+  push:
+    paths:
+      - 'backend/scanner/**'
+      - 'include/**'
+      - 'demo/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/scanner.yml'
+  pull_request:
+    paths:
+      - 'backend/scanner/**'
+      - 'include/**'
+      - 'demo/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/scanner.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  scanner:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM and Clang development libraries
+        run: sudo apt-get update && sudo apt-get install -y llvm-18-dev libclang-18-dev clang-18 ninja-build
+      - name: Configure without Qt
+        run: >-
+          cmake -S . -B build-core -G Ninja
+          -DHEADERSCOPE_BUILD_APP=OFF -DHEADERSCOPE_BUILD_SCANNER=ON -DCMAKE_BUILD_TYPE=Release
+          -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+          -DClang_DIR=/usr/lib/llvm-18/lib/cmake/clang
+      - name: Build
+        run: cmake --build build-core --parallel 2
+      - name: Test scanner
+        run: ctest --test-dir build-core --output-on-failure
+      - name: Check demo JSON
+        run: |
+          cmake -S demo/include-chain -B build-demo -G Ninja
+          cmake --build build-demo
+          build-core/backend/scanner/headerscope_scan build-demo > build-demo/scan.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('build-demo/scan.json').read_text())
+          assert result['status'] == 'complete', result
+          assert len(result['edges']) == 2, result
+          assert not result['diagnostics'], result
+          PY

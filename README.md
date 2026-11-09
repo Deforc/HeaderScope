@@ -4,7 +4,7 @@ HeaderScope — приложение для macOS / Windows на C++ и Qt, ко
 
 ## Быстрый старт
 
-Для сборки приложения нужны компилятор с C++20, CMake 3.21+ и Qt 6.5+ с модулем Qt Widgets. Команды ниже рассчитаны на запуск из корня репозитория.
+Для сборки приложения нужны компилятор с C++20, CMake 3.21+ и Qt 6.5+ с модулем Qt Widgets. Для включения сборщика дополнительно нужны LLVM/Clang 18+ с библиотеками LibTooling. Команды ниже рассчитаны на запуск из корня репозитория. Настройка LLVM и проверка без Qt описаны в [инструкции сборщика](backend/scanner/README.md).
 
 ```sh
 cmake -S . -B build
@@ -22,7 +22,8 @@ cmake -S . -B build-core -DHEADERSCOPE_BUILD_APP=OFF
 cmake --build build-core
 ```
 
-Каркас запускает пустое окно HeaderScope. Сборщик и ядро графа пока можно проверять через консольный прототип.
+Каркас запускает пустое окно HeaderScope. Ядро графа и сборщик можно проверять через консольный прототип `headerscope_inspect`; команда `headerscope_scan` выводит результат сборщика в JSON.
+
 
 ## Демопроект
 
@@ -37,7 +38,7 @@ cmake --build build-demo
 
 ## Консольный прототип анализа
 
-Для сборщика нужны библиотека libclang и заголовки `clang-c`. Если CMake не находит их, передайте префикс LLVM через `-DCMAKE_PREFIX_PATH` или задайте явно `HEADERSCOPE_LIBCLANG_INCLUDE_DIR` и `HEADERSCOPE_LIBCLANG_LIBRARY`.
+Для сборщика нужны LLVM/Clang 18+ с библиотеками LibTooling. Если CMake не находит их, передайте префикс LLVM через `-DCMAKE_PREFIX_PATH` или задайте `LLVM_DIR` и `Clang_DIR` по [инструкции сборщика](backend/scanner/README.md).
 
 ```sh
 cmake -S . -B build-inspect -DHEADERSCOPE_BUILD_APP=OFF -DHEADERSCOPE_BUILD_SCANNER=ON

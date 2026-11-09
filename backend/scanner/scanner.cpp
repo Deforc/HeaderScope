@@ -1,206 +1,244 @@
 #include <headerscope/scanner.hpp>
 
-#include <clang-c/CXCompilationDatabase.h>
-#include <clang-c/Index.h>
+#include <clang/Basic/Diagnostic.h>
+#include <clang/Basic/FileManager.h>
+#include <clang/Basic/SourceManager.h>
+#include <clang/Basic/Version.h>
+#include <clang/Frontend/CompilerInstance.h>
+#include <clang/Frontend/FrontendActions.h>
+#include <clang/Lex/PPCallbacks.h>
+#include <clang/Lex/Preprocessor.h>
+#include <clang/Tooling/JSONCompilationDatabase.h>
+#include <clang/Tooling/Tooling.h>
+#include <llvm/ADT/SmallString.h>
+#include <llvm/Support/VirtualFileSystem.h>
 
-#include <exception>
+#include <algorithm>
 #include <memory>
 #include <set>
 #include <tuple>
-#include <type_traits>
-#include <utility>
 
 namespace headerscope {
 namespace {
+namespace fs = std::filesystem;
 
-using Path = std::filesystem::path;
-using Edges = std::set<std::tuple<Path, Path, std::uint32_t>>;
-
-template <typename Handle, auto Dispose>
-using ClangHandle = std::unique_ptr<std::remove_pointer_t<Handle>, decltype(Dispose)>;
-
-std::string takeString(CXString value)
+fs::path normalize(fs::path path, const fs::path& base)
 {
-    const auto* text = clang_getCString(value);
-    std::string result = text ? text : "";
-    clang_disposeString(value);
-    return result;
+    if (path.is_relative())
+        path = base / path;
+    std::error_code error;
+    const auto canonical = fs::weakly_canonical(path, error);
+    return error ? path.lexically_normal() : canonical;
 }
 
-Path resolve(const Path& file, const Path& directory)
+fs::path workingDirectory(clang::FileManager& files)
 {
-    return (directory / file).lexically_normal();
+    const auto directory = files.getVirtualFileSystem().getCurrentWorkingDirectory();
+    return directory ? fs::path(*directory) : fs::path{};
 }
 
-Path filePath(CXFile file, const Path& directory)
+fs::path filePath(clang::FileEntryRef file, const fs::path& base)
 {
-    if (!file) {
-        return {};
-    }
-    const auto name = takeString(clang_getFileName(file));
-    return name.empty() || name.front() == '<' ? Path{} : resolve(name, directory);
+    const auto realPath = file.getFileEntry().tryGetRealPathName();
+    return normalize(fs::path((realPath.empty() ? file.getName() : realPath).str()), base);
 }
 
-void addError(ScanResult& result, std::string message, const Path& file)
-{
-    result.diagnostics.push_back({DiagnosticSeverity::error, std::move(message),
-                                  file, std::nullopt});
-}
-
-struct IncludeVisitor {
-    const Path& directory;
-    Edges& edges;
-    std::exception_ptr error;
+struct ScanState {
+    ScanResult result;
+    std::set<fs::path> files;
+    // A source without includes is still a useful result, but a missing input is not.
+    std::size_t startedSources = 0;
 };
 
-CXChildVisitResult collectInclude(CXCursor cursor, CXCursor, CXClientData data)
-{
-    if (clang_getCursorKind(cursor) != CXCursor_InclusionDirective) {
-        return CXChildVisit_Continue;
-    }
-    auto& visitor = *static_cast<IncludeVisitor*>(data);
-    try {
-        CXFile sourceFile = nullptr;
-        unsigned line = 0;
-        clang_getFileLocation(clang_getCursorLocation(cursor), &sourceFile,
-                              &line, nullptr, nullptr);
-        const auto source = filePath(sourceFile, visitor.directory);
-        const auto included = filePath(clang_getIncludedFile(cursor), visitor.directory);
-        if (!source.empty() && !included.empty() && line != 0) {
-            visitor.edges.emplace(source, included, line);
-        }
-        return CXChildVisit_Continue;
-    } catch (...) {
-        visitor.error = std::current_exception();
-        return CXChildVisit_Break;
-    }
-}
+class Diagnostics final : public clang::DiagnosticConsumer {
+public:
+    explicit Diagnostics(ScanState& state) : state_(state) {}
 
-bool collectDiagnostics(CXTranslationUnit unit, const Path& directory, ScanResult& result)
-{
-    bool hasErrors = false;
-    const auto count = clang_getNumDiagnostics(unit);
-    for (unsigned i = 0; i < count; ++i) {
-        const ClangHandle<CXDiagnostic, clang_disposeDiagnostic> diagnostic(
-            clang_getDiagnostic(unit, i), clang_disposeDiagnostic);
-        const auto severity = clang_getDiagnosticSeverity(diagnostic.get());
-        if (severity < CXDiagnostic_Warning) {
-            continue;
-        }
-        const bool isError = severity >= CXDiagnostic_Error;
-        hasErrors |= isError;
-        CXFile file = nullptr;
-        unsigned line = 0;
-        clang_getFileLocation(clang_getDiagnosticLocation(diagnostic.get()),
-                              &file, &line, nullptr, nullptr);
-        const auto path = filePath(file, directory);
-        result.diagnostics.push_back({
-            isError ? DiagnosticSeverity::error : DiagnosticSeverity::warning,
-            takeString(clang_getDiagnosticSpelling(diagnostic.get())),
-            path.empty() ? std::nullopt : std::optional{path},
-            line == 0 ? std::nullopt : std::optional<std::uint32_t>{line},
-        });
-    }
-    return hasErrors;
-}
+    void HandleDiagnostic(clang::DiagnosticsEngine::Level level,
+                          const clang::Diagnostic& info) override
+    {
+        clang::DiagnosticConsumer::HandleDiagnostic(level, info);
+        if (level < clang::DiagnosticsEngine::Warning)
+            return;
 
+        llvm::SmallString<256> message;
+        info.FormatDiagnostic(message);
+        Diagnostic diagnostic{level == clang::DiagnosticsEngine::Warning
+                                  ? DiagnosticSeverity::warning : DiagnosticSeverity::error,
+                              message.str().str(), std::nullopt, std::nullopt};
+        if (info.hasSourceManager() && info.getLocation().isValid()) {
+            const auto& source = info.getSourceManager();
+            const auto location = source.getFileLoc(info.getLocation());
+            if (const auto file = source.getFileEntryRefForID(source.getFileID(location))) {
+                diagnostic.file = filePath(*file, workingDirectory(source.getFileManager()));
+                diagnostic.line = source.getSpellingLineNumber(location);
+            }
+        }
+        state_.result.diagnostics.push_back(std::move(diagnostic));
+    }
+
+private:
+    ScanState& state_;
+};
+
+class Includes final : public clang::PPCallbacks {
+public:
+    Includes(clang::SourceManager& source, ScanState& state, ScanOptions options)
+        : source_(source), state_(state), options_(options),
+          base_(workingDirectory(source.getFileManager())) {}
+
+    void InclusionDirective(clang::SourceLocation hashLocation, const clang::Token&,
+                            llvm::StringRef, bool, clang::CharSourceRange,
+                            clang::OptionalFileEntryRef included, llvm::StringRef,
+                            llvm::StringRef, const clang::Module*,
+#if CLANG_VERSION_MAJOR >= 19
+                            bool,
+#endif
+                            clang::SrcMgr::CharacteristicKind fileType) override
+    {
+        // Missing headers are reported by Clang. Never invent an endpoint.
+        if (!included)
+            return;
+        const auto location = source_.getFileLoc(hashLocation);
+        if (!options_.includeSystemHeaders &&
+            (fileType != clang::SrcMgr::C_User || source_.isInSystemHeader(location)))
+            return;
+        const auto includer = source_.getFileEntryRefForID(source_.getFileID(location));
+        if (!includer) // Ignore synthetic buffers such as <built-in> / command-line -include.
+            return;
+
+        IncludeEdge edge{filePath(*includer, base_), filePath(*included, base_),
+                         source_.getSpellingLineNumber(location)};
+        state_.files.insert(edge.includer);
+        state_.files.insert(edge.included);
+        state_.result.edges.push_back(std::move(edge));
+    }
+
+private:
+    clang::SourceManager& source_;
+    ScanState& state_;
+    ScanOptions options_;
+    fs::path base_;
+};
+
+class ScanAction final : public clang::SyntaxOnlyAction {
+public:
+    ScanAction(ScanState& state, ScanOptions options) : state_(state), options_(options) {}
+
+    bool BeginSourceFileAction(clang::CompilerInstance& compiler) override
+    {
+        if (!clang::SyntaxOnlyAction::BeginSourceFileAction(compiler))
+            return false;
+        auto& source = compiler.getSourceManager();
+        const auto file = source.getFileEntryRefForID(source.getMainFileID());
+        if (!file)
+            return false;
+        ++state_.startedSources;
+        state_.files.insert(filePath(*file, workingDirectory(compiler.getFileManager())));
+        compiler.getPreprocessor().addPPCallbacks(
+            std::make_unique<Includes>(source, state_, options_));
+        return true;
+    }
+
+private:
+    ScanState& state_;
+    ScanOptions options_;
+};
+
+class ScanFactory final : public clang::tooling::FrontendActionFactory {
+public:
+    ScanFactory(ScanState& state, ScanOptions options) : state_(state), options_(options) {}
+    std::unique_ptr<clang::FrontendAction> create() override
+    {
+        return std::make_unique<ScanAction>(state_, options_);
+    }
+
+private:
+    ScanState& state_;
+    ScanOptions options_;
+};
+
+void addError(ScanState& state, std::string message)
+{
+    state.result.diagnostics.push_back(
+        {DiagnosticSeverity::error, std::move(message), std::nullopt, std::nullopt});
+}
 } // namespace
 
-ScanResult scanIncludes(const Path& compilationDatabase)
+ScanResult scanProject(const std::filesystem::path& compilationDatabase,
+                       const ScanOptions& options)
 {
-    ScanResult result;
+    ScanState state;
     std::error_code error;
-    const auto databasePath = std::filesystem::absolute(compilationDatabase, error).lexically_normal();
-    if (error || databasePath.filename() != "compile_commands.json" ||
-        !std::filesystem::is_regular_file(databasePath, error)) {
-        addError(result, "Expected an existing compile_commands.json", compilationDatabase);
-        return result;
+    const auto cwd = fs::current_path(error);
+    if (error || compilationDatabase.empty()) {
+        addError(state, "Cannot resolve compilation database path");
+        return state.result;
+    }
+    auto path = normalize(compilationDatabase, cwd);
+    if (fs::is_directory(path, error))
+        path /= "compile_commands.json";
+
+    std::string loadError;
+    auto database = clang::tooling::JSONCompilationDatabase::loadFromFile(
+        path.string(), loadError, clang::tooling::JSONCommandLineSyntax::AutoDetect);
+    if (!database) {
+        addError(state, "Cannot load " + path.string() + ": " + loadError);
+        return state.result;
     }
 
-    const auto databaseDirectory = databasePath.parent_path();
-    CXCompilationDatabase_Error databaseError;
-    const ClangHandle<CXCompilationDatabase, clang_CompilationDatabase_dispose> database(
-        clang_CompilationDatabase_fromDirectory(databaseDirectory.string().c_str(), &databaseError),
-        clang_CompilationDatabase_dispose);
-    if (!database || databaseError != CXCompilationDatabase_NoError) {
-        addError(result, "Could not read the compilation database", databasePath);
-        return result;
-    }
-    const ClangHandle<CXCompileCommands, clang_CompileCommands_dispose> commands(
-        clang_CompilationDatabase_getAllCompileCommands(database.get()),
-        clang_CompileCommands_dispose);
-    const auto count = commands ? clang_CompileCommands_getSize(commands.get()) : 0;
-    if (count == 0) {
-        addError(result, "The compilation database contains no commands", databasePath);
-        return result;
+    auto sources = database->getAllFiles();
+    std::sort(sources.begin(), sources.end());
+    sources.erase(std::unique(sources.begin(), sources.end()), sources.end());
+    if (sources.empty()) {
+        addError(state, "Compilation database contains no source files");
+        return state.result;
     }
 
-    const ClangHandle<CXIndex, clang_disposeIndex> index(clang_createIndex(0, 0),
-                                                       clang_disposeIndex);
-    std::set<Path> files;
-    Edges edges;
-    unsigned parsedCount = 0;
-    bool hasErrors = false;
-    for (unsigned i = 0; i < count; ++i) {
-        const auto command = clang_CompileCommands_getCommand(commands.get(), i);
-        const auto directory = resolve(takeString(clang_CompileCommand_getDirectory(command)),
-                                       databaseDirectory);
-        const auto source = resolve(takeString(clang_CompileCommand_getFilename(command)),
-                                    directory);
-        const auto argc = clang_CompileCommand_getNumArgs(command);
-        if (argc == 0) {
-            addError(result, "The compilation command has no arguments", source);
-            hasErrors = true;
-            continue;
-        }
+    Diagnostics diagnostics(state);
+    ScanFactory factory(state, options);
+    // A private filesystem keeps per-command working directories out of the
+    // application's process cwd. In particular, relative -I paths remain valid.
+    clang::tooling::ClangTool tool(*database, sources,
+        std::make_shared<clang::PCHContainerOperations>(), llvm::vfs::createPhysicalFileSystem());
+    tool.appendArgumentsAdjuster([](const clang::tooling::CommandLineArguments& arguments,
+                                    llvm::StringRef) {
+        const bool specified = std::any_of(arguments.begin(), arguments.end(),
+            [](const std::string& argument) {
+                return argument == "-resource-dir" || argument.starts_with("-resource-dir=");
+            });
+        auto adjusted = arguments;
+        if (!specified && !adjusted.empty())
+            adjusted.insert(adjusted.begin() + 1,
+                            "-resource-dir=" HEADERSCOPE_CLANG_RESOURCE_DIR);
+        return adjusted;
+    });
+    tool.setDiagnosticConsumer(&diagnostics);
+    tool.setPrintErrorMessage(false);
+    const int exitCode = tool.run(&factory);
+    const bool hasErrors = std::any_of(state.result.diagnostics.begin(),
+        state.result.diagnostics.end(), [](const Diagnostic& diagnostic) {
+            return diagnostic.severity == DiagnosticSeverity::error;
+        });
+    if (exitCode != 0 && !hasErrors)
+        addError(state, "Clang analysis failed (exit code " + std::to_string(exitCode) + ")");
 
-        std::vector<std::string> args;
-        args.reserve(argc + 1);
-        args.push_back(takeString(clang_CompileCommand_getArg(command, 0)));
-        args.push_back("-working-directory=" + directory.string());
-        for (unsigned j = 1; j < argc; ++j) {
-            args.push_back(takeString(clang_CompileCommand_getArg(command, j)));
-        }
-        std::vector<const char*> argv;
-        argv.reserve(args.size());
-        for (const auto& arg : args) {
-            argv.push_back(arg.c_str());
-        }
+    auto& edges = state.result.edges;
+    std::sort(edges.begin(), edges.end(), [](const IncludeEdge& left, const IncludeEdge& right) {
+        return std::tie(left.includer, left.included, left.line) <
+               std::tie(right.includer, right.included, right.line);
+    });
+    // Keep distinct line numbers, but avoid duplicating shared headers per TU.
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    state.result.files.assign(state.files.begin(), state.files.end());
+    state.result.status = state.startedSources == 0 ? ScanStatus::failed
+        : (exitCode != 0 || hasErrors ? ScanStatus::partial : ScanStatus::complete);
+    return std::move(state.result);
+}
 
-        CXTranslationUnit rawUnit = nullptr;
-        const auto status = clang_parseTranslationUnit2FullArgv(
-            index.get(), nullptr, argv.data(), static_cast<int>(argv.size()), nullptr, 0,
-            CXTranslationUnit_DetailedPreprocessingRecord | CXTranslationUnit_KeepGoing,
-            &rawUnit);
-        const ClangHandle<CXTranslationUnit, clang_disposeTranslationUnit> unit(
-            rawUnit, clang_disposeTranslationUnit);
-        if (status != CXError_Success || !unit) {
-            addError(result, "Clang could not parse this compilation command (error " +
-                                  std::to_string(status) + ")", source);
-            hasErrors = true;
-            continue;
-        }
-
-        ++parsedCount;
-        files.insert(source);
-        hasErrors |= collectDiagnostics(unit.get(), directory, result);
-        IncludeVisitor visitor{directory, edges, {}};
-        clang_visitChildren(clang_getTranslationUnitCursor(unit.get()), collectInclude, &visitor);
-        if (visitor.error) {
-            std::rethrow_exception(visitor.error);
-        }
-    }
-
-    for (const auto& [source, included, line] : edges) {
-        files.insert(source);
-        files.insert(included);
-        result.edges.push_back({source, included, line});
-    }
-    result.files.assign(files.begin(), files.end());
-    if (parsedCount > 0) {
-        result.status = hasErrors ? ScanStatus::partial : ScanStatus::complete;
-    }
-    return result;
+ScanResult scanIncludes(const std::filesystem::path& compilationDatabase)
+{
+    return scanProject(compilationDatabase);
 }
 
 } // namespace headerscope
