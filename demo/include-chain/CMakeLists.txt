@@ -3,9 +3,13 @@ project(HeaderScopeIncludeChain LANGUAGES CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(HEADERSCOPE_DEMO_EXTRA "Enable the conditional include in a.h" OFF)
+option(HEADERSCOPE_DEMO_CYCLE "Enable the include from b.h back to a.h" OFF)
 
 add_executable(headerscope_include_chain main.cpp)
 target_compile_features(headerscope_include_chain PRIVATE cxx_std_20)
 if(HEADERSCOPE_DEMO_EXTRA)
     target_compile_definitions(headerscope_include_chain PRIVATE HEADERSCOPE_DEMO_EXTRA)
+endif()
+if(HEADERSCOPE_DEMO_CYCLE)
+    target_compile_definitions(headerscope_include_chain PRIVATE HEADERSCOPE_DEMO_CYCLE)
 endif()
