@@ -83,8 +83,8 @@ private:
 
 class Includes final : public clang::PPCallbacks {
 public:
-    Includes(clang::SourceManager& source, ScanState& state, ScanOptions options)
-        : source_(source), state_(state), options_(options),
+    Includes(clang::SourceManager& source, ScanState& state)
+        : source_(source), state_(state),
           base_(workingDirectory(source.getFileManager())) {}
 
     void InclusionDirective(clang::SourceLocation hashLocation, const clang::Token&,
@@ -100,8 +100,7 @@ public:
         if (!included)
             return;
         const auto location = source_.getFileLoc(hashLocation);
-        if (!options_.includeSystemHeaders &&
-            (fileType != clang::SrcMgr::C_User || source_.isInSystemHeader(location)))
+        if (fileType != clang::SrcMgr::C_User || source_.isInSystemHeader(location))
             return;
         const auto includer = source_.getFileEntryRefForID(source_.getFileID(location));
         if (!includer) // Ignore synthetic buffers such as <built-in> / command-line -include.
@@ -117,13 +116,12 @@ public:
 private:
     clang::SourceManager& source_;
     ScanState& state_;
-    ScanOptions options_;
     fs::path base_;
 };
 
 class ScanAction final : public clang::SyntaxOnlyAction {
 public:
-    ScanAction(ScanState& state, ScanOptions options) : state_(state), options_(options) {}
+    explicit ScanAction(ScanState& state) : state_(state) {}
 
     bool BeginSourceFileAction(clang::CompilerInstance& compiler) override
     {
@@ -136,26 +134,24 @@ public:
         ++state_.startedSources;
         state_.files.insert(filePath(*file, workingDirectory(compiler.getFileManager())));
         compiler.getPreprocessor().addPPCallbacks(
-            std::make_unique<Includes>(source, state_, options_));
+            std::make_unique<Includes>(source, state_));
         return true;
     }
 
 private:
     ScanState& state_;
-    ScanOptions options_;
 };
 
 class ScanFactory final : public clang::tooling::FrontendActionFactory {
 public:
-    ScanFactory(ScanState& state, ScanOptions options) : state_(state), options_(options) {}
+    explicit ScanFactory(ScanState& state) : state_(state) {}
     std::unique_ptr<clang::FrontendAction> create() override
     {
-        return std::make_unique<ScanAction>(state_, options_);
+        return std::make_unique<ScanAction>(state_);
     }
 
 private:
     ScanState& state_;
-    ScanOptions options_;
 };
 
 void addError(ScanState& state, std::string message)
@@ -165,8 +161,7 @@ void addError(ScanState& state, std::string message)
 }
 } // namespace
 
-ScanResult scanProject(const std::filesystem::path& compilationDatabase,
-                       const ScanOptions& options)
+ScanResult scanIncludes(const std::filesystem::path& compilationDatabase)
 {
     ScanState state;
     std::error_code error;
@@ -196,7 +191,7 @@ ScanResult scanProject(const std::filesystem::path& compilationDatabase,
     }
 
     Diagnostics diagnostics(state);
-    ScanFactory factory(state, options);
+    ScanFactory factory(state);
     // A private filesystem keeps per-command working directories out of the
     // application's process cwd. In particular, relative -I paths remain valid.
     clang::tooling::ClangTool tool(*database, sources,
@@ -234,11 +229,6 @@ ScanResult scanProject(const std::filesystem::path& compilationDatabase,
     state.result.status = state.startedSources == 0 ? ScanStatus::failed
         : (exitCode != 0 || hasErrors ? ScanStatus::partial : ScanStatus::complete);
     return std::move(state.result);
-}
-
-ScanResult scanIncludes(const std::filesystem::path& compilationDatabase)
-{
-    return scanProject(compilationDatabase);
 }
 
 } // namespace headerscope

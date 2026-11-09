@@ -36,9 +36,6 @@ target_compile_definitions(headerscope_scanner PRIVATE
 target_link_libraries(headerscope_scanner PUBLIC HeaderScope::contract
     PRIVATE clangTooling clangFrontend clangLex clangBasic)
 
-add_executable(headerscope_scan cli.cpp)
-target_link_libraries(headerscope_scan PRIVATE HeaderScope::scanner)
-
 if(BUILD_TESTING)
     add_executable(headerscope_scanner_tests tests/scanner_tests.cpp)
     target_link_libraries(headerscope_scanner_tests PRIVATE HeaderScope::scanner HeaderScope::demo_fixture)

@@ -4,7 +4,7 @@ project(HeaderScope LANGUAGES C CXX)
 include(CTest)
 
 option(HEADERSCOPE_BUILD_APP "Build the Qt desktop application" ON)
-option(HEADERSCOPE_BUILD_SCANNER "Build the Clang LibTooling scanner and demo CLIs" OFF)
+option(HEADERSCOPE_BUILD_SCANNER "Build the Clang LibTooling scanner and demo CLI" OFF)
 
 add_library(headerscope_contract INTERFACE)
 add_library(HeaderScope::contract ALIAS headerscope_contract)

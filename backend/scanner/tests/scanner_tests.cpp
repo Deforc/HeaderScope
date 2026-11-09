@@ -67,7 +67,7 @@ struct Project {
         }
         write("compile_commands.json", text + "]");
     }
-    ScanResult scan() const { return scanProject(root); }
+    ScanResult scan() const { return scanIncludes(root); }
 };
 
 bool hasEdge(const ScanResult& result, const fs::path& from, const fs::path& to,
@@ -192,10 +192,7 @@ void systemHeaders()
     const auto normal = project.scan();
     require(normal.status == ScanStatus::complete && normal.edges.empty() && normal.files.size() == 1,
             "System headers must be excluded by default");
-    const auto all = scanProject(project.root / "compile_commands.json", {true});
-    require(all.status == ScanStatus::complete && all.edges.size() == 2,
-            "Explicit system-header inclusion failed");
-    checkInvariants(all);
+    checkInvariants(normal);
 }
 
 void physicalLinesAndCycles()
@@ -246,7 +243,7 @@ void failedInputs()
         require(result.status == ScanStatus::failed && !result.diagnostics.empty() &&
                 result.files.empty() && result.edges.empty(), "Invalid input must fail with diagnostic");
     };
-    check(scanProject({}));
+    check(scanIncludes({}));
     check(project.scan());
     project.write("compile_commands.json", "not JSON");
     check(project.scan());

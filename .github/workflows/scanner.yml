@@ -1,20 +1,6 @@
 name: Scanner
 
-on:
-  push:
-    paths:
-      - 'backend/scanner/**'
-      - 'include/**'
-      - 'demo/**'
-      - 'CMakeLists.txt'
-      - '.github/workflows/scanner.yml'
-  pull_request:
-    paths:
-      - 'backend/scanner/**'
-      - 'include/**'
-      - 'demo/**'
-      - 'CMakeLists.txt'
-      - '.github/workflows/scanner.yml'
+on: [push, pull_request]
 
 permissions:
   contents: read
@@ -36,16 +22,3 @@ jobs:
         run: cmake --build build-core --parallel 2
       - name: Test scanner
         run: ctest --test-dir build-core --output-on-failure
-      - name: Check demo JSON
-        run: |
-          cmake -S demo/include-chain -B build-demo -G Ninja
-          cmake --build build-demo
-          build-core/backend/scanner/headerscope_scan build-demo > build-demo/scan.json
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          result = json.loads(Path('build-demo/scan.json').read_text())
-          assert result['status'] == 'complete', result
-          assert len(result['edges']) == 2, result
-          assert not result['diagnostics'], result
-          PY

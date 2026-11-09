@@ -4,7 +4,7 @@ HeaderScope — приложение для macOS / Windows на C++ и Qt, ко
 
 ## Быстрый старт
 
-Для сборки приложения нужны компилятор с C++20, CMake 3.21+ и Qt 6.5+ с модулем Qt Widgets. Для включения сборщика дополнительно нужны LLVM/Clang 18+ с библиотеками LibTooling. Команды ниже рассчитаны на запуск из корня репозитория. Настройка LLVM и проверка без Qt описаны в [инструкции сборщика](backend/scanner/README.md).
+Для сборки приложения нужны компилятор с C++20, CMake 3.21+ и Qt 6.5+ с модулем Qt Widgets. Для включения сборщика дополнительно нужны LLVM/Clang 18+ с библиотеками LibTooling. Команды ниже рассчитаны на запуск из корня репозитория.
 
 ```sh
 cmake -S . -B build
@@ -22,8 +22,7 @@ cmake -S . -B build-core -DHEADERSCOPE_BUILD_APP=OFF
 cmake --build build-core
 ```
 
-Каркас запускает пустое окно HeaderScope. Ядро графа и сборщик можно проверять через консольный прототип `headerscope_inspect`; команда `headerscope_scan` выводит результат сборщика в JSON.
-
+Каркас запускает пустое окно HeaderScope. Ядро графа и сборщик можно проверять через консольный прототип `headerscope_inspect`.
 
 ## Демопроект
 
@@ -38,13 +37,17 @@ cmake --build build-demo
 
 ## Консольный прототип анализа
 
-Для сборщика нужны LLVM/Clang 18+ с библиотеками LibTooling. Если CMake не находит их, передайте префикс LLVM через `-DCMAKE_PREFIX_PATH` или задайте `LLVM_DIR` и `Clang_DIR` по [инструкции сборщика](backend/scanner/README.md).
+Для сборщика нужны LLVM/Clang 18+ с библиотеками LibTooling. На macOS их можно установить командой `brew install llvm@18`; для поиска библиотек добавьте к конфигурации CMake `-DCMAKE_PREFIX_PATH="$(brew --prefix llvm@18)"`. Для другого комплекта LLVM можно задать `LLVM_DIR` и `Clang_DIR` — каталоги с файлами `LLVMConfig.cmake` и `ClangConfig.cmake`.
 
 ```sh
 cmake -S . -B build-inspect -DHEADERSCOPE_BUILD_APP=OFF -DHEADERSCOPE_BUILD_SCANNER=ON
 cmake --build build-inspect
 build-inspect/demo/inspect/headerscope_inspect build-demo/compile_commands.json demo/include-chain/b.h
 ```
+
+Проверки сборщика: `ctest --test-dir build-inspect --output-on-failure`.
+
+Сборщик возвращает активные подключения из команд компиляции, объединяя одинаковые директивы между исходниками. Системные заголовки исключены. Ошибки Clang передаются в `diagnostics`, а доступные связи сохраняются со статусом `partial`. Встроенные заголовки берутся из комплекта LLVM, выбранного при сборке; этот комплект нужен и при запуске. Связи внутри готовых PCH/модулей не восстанавливаются.
 
 Прототип показывает связи с номерами строк, циклические группы и кратчайшие цепочки от зависимых файлов до выбранного заголовка. Для проверки настоящего цикла повторите конфигурацию демопроекта с `-DHEADERSCOPE_DEMO_CYCLE=ON` и запустите анализ повторно.
 
