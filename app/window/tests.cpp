@@ -1,5 +1,10 @@
 #include "main_window.hpp"
 #include "graph_placeholder.hpp"
+#include "language.hpp"
+#include <QComboBox>
+#include <QSettings>
+#include <QStatusBar>
+#include <QGraphicsTextItem>
 #include <headerscope/demo/fixture.hpp>
 #include <QDir>
 #include <QFileInfo>
@@ -42,7 +47,85 @@ QColor markerColor(const QTreeWidgetItem* cycle) {
 
 class WindowTests : public QObject {
     Q_OBJECT
+    QTemporaryDir settingsDirectory_;
 private slots:
+    void initTestCase() {
+        QVERIFY(settingsDirectory_.isValid());
+        QCoreApplication::setOrganizationName(QStringLiteral("HeaderScopeTests"));
+        QCoreApplication::setApplicationName(QStringLiteral("WindowTests"));
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory_.path());
+    }
+    void cleanup() {
+        language::setEnglish(false);
+        QSettings().clear();
+    }
+    void languageSwitchPreservesGraphAndSelection() {
+        MainWindow window;
+        auto result = chain();
+        const auto root = result.files.front().parent_path();
+        result.edges.push_back({root / "b.h", root / "a.h", 4});
+        window.showResult(result);
+        auto* files = window.findChild<QTreeWidget*>("filesTree");
+        files->setCurrentItem(files->findItems(QStringLiteral("b.h"), Qt::MatchExactly | Qt::MatchRecursive).front());
+        auto* selected = files->currentItem();
+        auto* dependencies = window.findChild<QTreeWidget*>("dependenciesTree");
+        auto* dependent = dependencies->topLevelItem(0)->child(0);
+        dependencies->setCurrentItem(dependent);
+        auto* cycles = window.findChild<QTreeWidget*>("cyclesTree");
+        auto* cycle = cycles->topLevelItem(0)->child(0);
+        cycles->setCurrentItem(cycle);
+        window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(1);
+        auto* graph = window.findChild<GraphPlaceholder*>();
+        const auto before = graph->scene()->items();
+        auto* selector = window.findChild<QComboBox*>("languageSelector");
+        QVERIFY(selector);
+        selector->setCurrentIndex(1);
+        QCoreApplication::processEvents();
+        QCOMPARE(window.findChild<QPushButton*>("analyzeButton")->text(), QStringLiteral("Analyze"));
+        QCOMPARE(window.findChild<QTabBar*>("viewTabs")->tabText(1), QStringLiteral("Cycles"));
+        QCOMPARE(dependencies->topLevelItem(0)->text(0), QStringLiteral("Dependent files · 2"));
+        QVERIFY(cycles->topLevelItem(0)->text(0).startsWith(QStringLiteral("Group 1")));
+        QCOMPARE(files->currentItem(), selected);
+        QCOMPARE(dependencies->currentItem(), dependent);
+        QCOMPARE(cycles->currentItem(), cycle);
+        QCOMPARE(graph->scene()->items(), before);
+        QVERIFY(window.findChild<QLabel*>("analysisSummary")->text().startsWith(QStringLiteral("Analysis complete")));
+        selector->setCurrentIndex(0);
+        QCoreApplication::processEvents();
+        QCOMPARE(window.findChild<QPushButton*>("analyzeButton")->text(), QStringLiteral("Анализировать"));
+        QCOMPARE(dependencies->topLevelItem(0)->text(0), QStringLiteral("Зависимые файлы · 2"));
+        QCOMPARE(files->currentItem(), selected);
+    }
+    void languageSwitchDuringAnalysisAndDiagnostics() {
+        MainWindow window;
+        QSignalSpy done(&window, &MainWindow::analysisFinished);
+        window.runAnalysis();
+        auto* selector = window.findChild<QComboBox*>("languageSelector");
+        selector->setCurrentIndex(1);
+        QCOMPARE(window.findChild<QPushButton*>("analyzeButton")->text(), QStringLiteral("Analyzing…"));
+        QTRY_COMPARE(done.count(), 1);
+        auto* row = window.findChild<QTreeWidget*>("diagnosticsTree")->topLevelItem(0);
+        QCOMPARE(row->text(0), QStringLiteral("Error"));
+        QCOMPARE(row->text(1), QStringLiteral("Specify a project folder or compile_commands.json."));
+        selector->setCurrentIndex(0);
+        QCOMPARE(row->text(0), QStringLiteral("Ошибка"));
+        QCOMPARE(row->text(1), QStringLiteral("Укажите папку проекта или compile_commands.json."));
+    }
+    void languagePreferenceAndEmptyGraph() {
+        MainWindow first;
+        first.findChild<QComboBox*>("languageSelector")->setCurrentIndex(1);
+        QCoreApplication::processEvents();
+        QCOMPARE(QSettings().value(QStringLiteral("ui/language")).toString(), QStringLiteral("en"));
+        bool translated = false;
+        for (auto* item : first.findChild<GraphPlaceholder*>()->scene()->items())
+            if (auto* text = qgraphicsitem_cast<QGraphicsTextItem*>(item))
+                translated |= text->toPlainText() == QStringLiteral("Run analysis to see dependencies");
+        QVERIFY(translated);
+        MainWindow next;
+        QCOMPARE(next.findChild<QComboBox*>("languageSelector")->currentData().toString(), QStringLiteral("en"));
+        QCOMPARE(next.findChild<QPushButton*>("analyzeButton")->text(), QStringLiteral("Analyze"));
+    }
     void busyBlocksSecondRun() {
         MainWindow window;
         QSignalSpy done(&window, &MainWindow::analysisFinished);

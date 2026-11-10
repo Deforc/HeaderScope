@@ -8,6 +8,8 @@
 #include <vector>
 
 class GraphPlaceholder;
+class QComboBox;
+class QEvent;
 class QLabel;
 class QLineEdit;
 class QProgressBar;
@@ -31,7 +33,16 @@ public slots:
     void showResult(headerscope::ScanResult result);
 signals:
     void analysisFinished();
+protected:
+    void changeEvent(QEvent* event) override;
 private:
+    void retranslateUi();
+    void updateSummary();
+    bool hasResult_ = false;
+    std::size_t groupCount_ = 0;
+    QComboBox* language_;
+    QLabel* heading_;
+    QPushButton* fit_;
     struct CycleDetails {
         std::size_t fileCount;
         std::vector<headerscope::FileChain> chains;
