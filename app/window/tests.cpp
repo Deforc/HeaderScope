@@ -4,9 +4,12 @@
 #include <QDir>
 #include <QGraphicsLineItem>
 #include <QGraphicsScene>
+#include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QStackedWidget>
+#include <QTabBar>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTreeWidget>
@@ -44,7 +47,7 @@ private slots:
         QCOMPARE(matches.size(), 1);
         files->setCurrentItem(matches.front());
         auto* tree = window.findChild<QTreeWidget*>("dependenciesTree");
-        auto* dependents = tree->topLevelItem(1);
+        auto* dependents = tree->topLevelItem(0);
         QCOMPARE(dependents->childCount(), 2);
         QStringList names;
         for (int i = 0; i < dependents->childCount(); ++i) names << dependents->child(i)->text(0);
@@ -61,7 +64,7 @@ private slots:
             (QDir::tempPath() + QStringLiteral("/HeaderScope-test")).toStdString(), true));
         auto* files = window.findChild<QTreeWidget*>("filesTree");
         files->setCurrentItem(files->findItems(QStringLiteral("b.h"), Qt::MatchExactly | Qt::MatchRecursive).front());
-        auto* dependents = window.findChild<QTreeWidget*>("dependenciesTree")->topLevelItem(1);
+        auto* dependents = window.findChild<QTreeWidget*>("dependenciesTree")->topLevelItem(0);
         const auto highlighted = [&] {
             int count = 0;
             for (auto* item : window.findChild<GraphPlaceholder*>()->scene()->items())
@@ -155,6 +158,11 @@ private slots:
                 if (auto* line = qgraphicsitem_cast<QGraphicsLineItem*>(item)) count += line->pen().width() == 3;
             return count;
         };
+        QCOMPARE(window.findChild<QLabel*>("tabBadge")->text(), QStringLiteral("1"));
+        auto* details = window.findChild<QStackedWidget*>("details");
+        QCOMPARE(details->currentIndex(), 0);
+        window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(1); // The right column follows the tab.
+        QCOMPARE(details->currentIndex(), 1);
         QCOMPARE(highlighted(), 0);
         cycles->setCurrentItem(group->child(1)); // A member selects its whole group's chain.
         QCOMPARE(highlighted(), 2);

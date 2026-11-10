@@ -12,6 +12,8 @@ class QLabel;
 class QLineEdit;
 class QProgressBar;
 class QPushButton;
+class QStackedWidget;
+class QTabBar;
 class QTreeWidget;
 class QTreeWidgetItem;
 
@@ -52,6 +54,10 @@ private:
     GraphPlaceholder* graph_;
     QLabel* summary_;
     QLabel* selected_;
+    QLabel* selectedPath_;
+    QTabBar* tabs_;
+    QLabel* cycleBadge_;
+    QStackedWidget* details_;
     QProgressBar* progress_;
     QFutureWatcher<headerscope::ScanResult> watcher_;
     headerscope::ScanResult result_;
