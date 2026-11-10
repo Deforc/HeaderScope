@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <set>
 #include <utility>
 
 namespace headerscope {
@@ -151,6 +152,49 @@ std::vector<CycleGroup> DependencyGraph::cycles() const
         }
     }
     return groups;
+}
+
+std::vector<FileChain> DependencyGraph::simpleCycles(const CycleGroup& group) const
+{
+    std::vector<FileChain> cycles;
+    std::set<Path> available(group.members.begin(), group.members.end());
+    // Start each directed cycle at its smallest path so rotations appear only once.
+    for (const auto& start : group.members) {
+        available.erase(start);
+        FileChain path{start};
+        const auto enumerate = [&](auto&& self) -> void {
+            const auto& neighbors = forward_.at(path.back());
+            if (std::ranges::binary_search(neighbors, start)) {
+                cycles.push_back(path);
+                cycles.back().push_back(start);
+            }
+            if (std::ranges::none_of(neighbors, [&](const Path& next) { return available.contains(next); })) {
+                return;
+            }
+
+            // Only extend the current path through unused files that can reach its start.
+            std::set<Path> canClose;
+            FileChain pending{start};
+            for (std::size_t head = 0; head < pending.size(); ++head) {
+                for (const auto& previous : reverse_.at(pending[head])) {
+                    if (available.contains(previous) && canClose.insert(previous).second) {
+                        pending.push_back(previous);
+                    }
+                }
+            }
+            for (const auto& next : neighbors) {
+                if (canClose.contains(next)) {
+                    available.erase(next);
+                    path.push_back(next);
+                    self(self);
+                    path.pop_back();
+                    available.insert(next);
+                }
+            }
+        };
+        enumerate(enumerate);
+    }
+    return cycles;
 }
 
 } // namespace headerscope

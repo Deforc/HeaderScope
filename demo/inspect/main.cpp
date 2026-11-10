@@ -57,7 +57,18 @@ void printChain(const headerscope::FileChain& chain, const fs::path& root = {})
     std::cout << '\n';
 }
 
-void printDiff(const headerscope::DependencyDiff& diff, const fs::path& root)
+void printCycleGroups(const headerscope::DependencyGraph& graph,
+                      const std::vector<headerscope::CycleGroup>& groups, const fs::path& root = {})
+{
+    for (std::size_t i = 0; i < groups.size(); ++i) {
+        const auto chains = graph.simpleCycles(groups[i]);
+        std::cout << "Group " << i + 1 << " (" << chains.size() << " cycles)\n";
+        for (const auto& chain : chains) printChain(chain, root);
+    }
+}
+
+void printDiff(const headerscope::DependencyDiff& diff, const headerscope::DependencyGraph& graph,
+               const fs::path& root)
 {
     const auto printEdges = [&](const char* title, const auto& edges) {
         std::cout << title << ": " << edges.size() << '\n';
@@ -68,7 +79,7 @@ void printDiff(const headerscope::DependencyDiff& diff, const fs::path& root)
     printEdges("Added includes", diff.added);
     printEdges("Removed includes", diff.removed);
     std::cout << "New or expanded cycle groups: " << diff.newCycles.size() << '\n';
-    for (const auto& cycle : diff.newCycles) printChain(cycle.example, root);
+    printCycleGroups(graph, diff.newCycles, root);
     std::cout << "Affected source files: " << diff.affectedSources.size() << '\n';
     for (const auto& file : diff.affectedSources)
         std::cout << "  " << display(file, root) << '\n';
@@ -116,9 +127,9 @@ int main(int argc, char** argv)
                           << display(edge.included) << '\n';
             const auto cycles = graph.cycles();
             std::cout << "Cycle groups: " << cycles.size() << '\n';
-            for (const auto& group : cycles) printChain(group.example);
+            printCycleGroups(graph, cycles);
         }
-        if (baseline) printDiff(headerscope::compareScans(*baseline, scan), options.root);
+        if (baseline) printDiff(headerscope::compareScans(*baseline, scan), graph, options.root);
         if (options.rank) {
             std::cout << "Header impact (most affected sources first):\n";
             std::size_t position = 0;
