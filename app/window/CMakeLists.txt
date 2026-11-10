@@ -1,4 +1,4 @@
-add_library(headerscope_window STATIC main_window.cpp main_window.hpp graph_placeholder.cpp graph_placeholder.hpp)
+add_library(headerscope_window STATIC main_window.cpp main_window.hpp graph_placeholder.cpp graph_placeholder.hpp theme.hpp)
 target_include_directories(headerscope_window PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(headerscope_window PUBLIC HeaderScope::scanner HeaderScope::graph_view
     HeaderScope::demo_fixture Qt6::Widgets Qt6::Concurrent)

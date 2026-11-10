@@ -1,6 +1,7 @@
 #include "main_window.hpp"
 #include "graph_placeholder.hpp"
 #include "path_utils.hpp"
+#include "theme.hpp"
 #include <headerscope/demo/fixture.hpp>
 #include <headerscope/graph.hpp>
 #if HEADERSCOPE_HAS_SCANNER
@@ -11,15 +12,16 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QHash>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
-#include <QListWidget>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <exception>
@@ -35,11 +37,20 @@ headerscope::ScanResult failure(const QString& message) {
 QString relativeName(const std::filesystem::path& file, const QString& root) {
     return QDir(root).relativeFilePath(pathText(file));
 }
+// Hides leaves not matching `text`, and directories left without visible children. Returns true if visible.
+bool filterItem(QTreeWidgetItem* item, const QString& text) {
+    bool visible = false;
+    if (!item->childCount()) visible = item->data(0, Qt::UserRole + 1).toString().contains(text, Qt::CaseInsensitive);
+    for (int i = 0; i < item->childCount(); ++i) visible |= filterItem(item->child(i), text);
+    item->setHidden(!visible);
+    return visible;
+}
 QWidget* panel(const QString& title, QWidget* content, QWidget* extra = nullptr) {
     auto* widget = new QWidget;
+    widget->setObjectName(QStringLiteral("panel"));
     auto* layout = new QVBoxLayout(widget);
     auto* label = new QLabel(title);
-    QFont font = label->font(); font.setBold(true); label->setFont(font);
+    label->setObjectName(QStringLiteral("panelTitle"));
     layout->addWidget(label);
     if (extra) layout->addWidget(extra);
     layout->addWidget(content, 1);
@@ -47,10 +58,38 @@ QWidget* panel(const QString& title, QWidget* content, QWidget* extra = nullptr)
 }
 }
 
+void populateFileTree(QTreeWidget* tree, const std::vector<std::filesystem::path>& files, const QString& root) {
+    QHash<QString, QTreeWidgetItem*> directories;
+    for (const auto& file : files) {
+        const QStringList parts = relativeName(file, root).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        QTreeWidgetItem* parent = nullptr;
+        QString key;
+        for (qsizetype i = 0; i + 1 < parts.size(); ++i) {
+            key += parts[i] + QLatin1Char('/');
+            auto*& directory = directories[key];
+            if (!directory) {
+                directory = parent ? new QTreeWidgetItem(parent, {parts[i]}) : new QTreeWidgetItem(tree, {parts[i]});
+                directory->setToolTip(0, key);
+            }
+            parent = directory;
+        }
+        const QString name = parts.isEmpty() ? pathText(file) : parts.back();
+        // Search matches the relative path, so typing a directory name finds the files inside it.
+        auto* leaf = parent ? new QTreeWidgetItem(parent, {name}) : new QTreeWidgetItem(tree, {name});
+        leaf->setData(0, Qt::UserRole, pathText(file)); leaf->setToolTip(0, pathText(file));
+        leaf->setData(0, Qt::UserRole + 1, parts.join(QLatin1Char('/')));
+    }
+    tree->expandAll();
+}
+
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle(QStringLiteral("HeaderScope"));
     resize(1280, 800);
+    setStyleSheet(themeStyleSheet());
+    connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this,
+            [this] { setStyleSheet(themeStyleSheet()); });
     auto* central = new QWidget(this);
+    central->setObjectName(QStringLiteral("central"));
     auto* layout = new QVBoxLayout(central);
     layout->setContentsMargins(18, 18, 18, 12);
     layout->setSpacing(12);
@@ -88,8 +127,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     summary_->setWordWrap(true); layout->addWidget(summary_);
 
     auto* horizontal = new QSplitter(Qt::Horizontal);
-    files_ = new QListWidget;
-    files_->setObjectName(QStringLiteral("filesList"));
+    files_ = new QTreeWidget;
+    files_->setObjectName(QStringLiteral("filesTree"));
+    files_->setHeaderHidden(true);
     files_->setAccessibleName(tr("Файлы проекта"));
     search_ = new QLineEdit;
     search_->setObjectName(QStringLiteral("fileSearch"));
@@ -104,6 +144,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     dependencies_->setMinimumWidth(260);
     dependencies_->setAccessibleName(tr("Подключения и зависимые файлы"));
     selected_ = new QLabel(tr("Выберите файл")); selected_->setWordWrap(true);
+    selected_->setObjectName(QStringLiteral("selectedFile"));
     selected_->setTextFormat(Qt::PlainText);
     horizontal->addWidget(panel(tr("ЗАВИСИМОСТИ"), dependencies_, selected_));
     horizontal->setStretchFactor(0, 1); horizontal->setStretchFactor(1, 3); horizontal->setStretchFactor(2, 2);
@@ -129,7 +170,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(analyze_, &QPushButton::clicked, this, &MainWindow::runAnalysis);
     connect(project_, &QLineEdit::returnPressed, this, &MainWindow::runAnalysis);
     connect(&watcher_, &QFutureWatcher<headerscope::ScanResult>::finished, this, &MainWindow::finishAnalysis);
-    connect(files_, &QListWidget::currentRowChanged, this, &MainWindow::updateSelection);
+    connect(files_, &QTreeWidget::currentItemChanged, this, &MainWindow::updateSelection);
     connect(search_, &QLineEdit::textChanged, this, &MainWindow::filterFiles);
     connect(fit, &QPushButton::clicked, graph_, &GraphPlaceholder::fitGraph);
     connect(graph_, &GraphPlaceholder::fileActivated, this, &MainWindow::selectPath);
@@ -210,6 +251,7 @@ void MainWindow::finishAnalysis() {
             diagnostic.file ? pathText(*diagnostic.file) : QString(),
             diagnostic.line ? QString::number(*diagnostic.line) : QString()});
         if (diagnostic.file) row->setData(0, Qt::UserRole, pathText(*diagnostic.file));
+        row->setForeground(0, QColor(diagnostic.severity == headerscope::DiagnosticSeverity::error ? "#ef4444" : "#d97706"));
         row->setToolTip(1, row->text(1)); row->setToolTip(2, row->text(2));
     }
     if (result_.status == headerscope::ScanStatus::failed) {
@@ -220,13 +262,12 @@ void MainWindow::finishAnalysis() {
     const QString root = mode_->currentIndex() == 3
         ? (QFileInfo(project_->text()).isDir() ? project_->text() : QFileInfo(project_->text()).absolutePath())
         : pathText(result_.files.empty() ? std::filesystem::path{} : result_.files.front().parent_path());
-    for (const auto& file : result_.files) {
-        auto* row = new QListWidgetItem(relativeName(file, root), files_);
-        row->setData(Qt::UserRole, pathText(file)); row->setToolTip(pathText(file));
-    }
+    populateFileTree(files_, result_.files, root);
     graph_->setResult(result_);
     filterFiles(search_->text());
-    if (files_->count() && !files_->currentItem()) files_->setCurrentRow(0);
+    if (!files_->currentItem())
+        for (QTreeWidgetItemIterator it(files_); *it; ++it)
+            if ((*it)->data(0, Qt::UserRole).isValid()) { files_->setCurrentItem(*it); break; }
     const QString status = result_.status == headerscope::ScanStatus::partial ? tr("Частичный анализ") : tr("Анализ завершён");
     summary_->setText(tr("%1 · %2 файлов · %3 директив #include · %4 сообщений%5")
         .arg(status).arg(result_.files.size()).arg(result_.edges.size()).arg(result_.diagnostics.size())
@@ -234,21 +275,20 @@ void MainWindow::finishAnalysis() {
     statusBar()->showMessage(status); emit analysisFinished();
 }
 void MainWindow::filterFiles(const QString& text) {
-    for (int i = 0; i < files_->count(); ++i)
-        files_->item(i)->setHidden(!files_->item(i)->text().contains(text, Qt::CaseInsensitive));
+    for (int i = 0; i < files_->topLevelItemCount(); ++i) filterItem(files_->topLevelItem(i), text);
 }
 void MainWindow::selectPath(const QString& path) {
-    for (int i = 0; i < files_->count(); ++i) {
-        if (files_->item(i)->data(Qt::UserRole).toString() == path) {
-            search_->clear(); files_->setCurrentRow(i); files_->scrollToItem(files_->item(i)); return;
+    for (QTreeWidgetItemIterator it(files_); *it; ++it) {
+        if ((*it)->data(0, Qt::UserRole).toString() == path) {
+            search_->clear(); files_->setCurrentItem(*it); files_->scrollToItem(*it); return;
         }
     }
 }
 void MainWindow::updateSelection() {
     dependencies_->clear();
     const auto* row = files_->currentItem();
-    if (!row || !dependencyGraph_) return;
-    const auto file = nativePath(row->data(Qt::UserRole).toString());
+    if (!row || !row->data(0, Qt::UserRole).isValid() || !dependencyGraph_) return;
+    const auto file = nativePath(row->data(0, Qt::UserRole).toString());
     selected_->setText(pathText(file)); graph_->selectFile(file);
     auto* outgoing = new QTreeWidgetItem(dependencies_, {tr("Прямые подключения")});
     auto* incoming = new QTreeWidgetItem(dependencies_, {tr("Зависимые файлы · прямые и косвенные")});

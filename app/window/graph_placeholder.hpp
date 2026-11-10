@@ -16,5 +16,7 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
 private:
+    void recolor();
     QGraphicsScene* scene_;
+    QString selected_;
 };

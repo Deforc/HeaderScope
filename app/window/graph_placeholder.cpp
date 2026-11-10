@@ -1,5 +1,6 @@
 #include "graph_placeholder.hpp"
 #include "path_utils.hpp"
+#include "theme.hpp"
 #include <QGraphicsItem>
 #include <QGraphicsScene>
 #include <QPainter>
@@ -15,20 +16,22 @@ GraphPlaceholder::GraphPlaceholder(QWidget* parent) : QGraphicsView(parent), sce
     setRenderHint(QPainter::Antialiasing);
     setDragMode(ScrollHandDrag);
     setTransformationAnchor(AnchorUnderMouse);
-    setBackgroundBrush(QColor("#f5f7fb"));
     setMinimumSize(280, 220);
     setAccessibleName(tr("Граф подключений"));
     scene_->addText(tr("Запустите анализ, чтобы увидеть связи"));
+    recolor();
+    connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, &GraphPlaceholder::recolor);
 }
 void GraphPlaceholder::setResult(const headerscope::ScanResult& result) {
     scene_->clear();
+    selected_.clear();
     resetTransform();
     std::set<std::filesystem::path> files(result.files.begin(), result.files.end());
     for (const auto& edge : result.edges) {
         files.insert(edge.includer);
         files.insert(edge.included);
     }
-    if (files.empty()) { scene_->addText(tr("Нет файлов для отображения")); return; }
+    if (files.empty()) { scene_->addText(tr("Нет файлов для отображения")); recolor(); return; }
     const int columns = std::max(1, int(std::ceil(std::sqrt(double(files.size())))));
     std::map<std::filesystem::path, QPointF> positions;
     int index = 0;
@@ -57,23 +60,44 @@ void GraphPlaceholder::setResult(const headerscope::ScanResult& result) {
                            QPen(Qt::NoPen), QBrush(QColor("#64748b")));
     }
     for (const auto& [file, point] : positions) {
-        auto* box = scene_->addRect(QRectF(-94, -25, 188, 50), QPen(QColor("#cbd5e1")), QBrush(Qt::white));
+        QPainterPath shape;
+        shape.addRoundedRect(QRectF(-94, -25, 188, 50), 10, 10);
+        auto* box = scene_->addPath(shape);
+        box->setData(1, QString::fromStdString(file.extension().string()).startsWith(QStringLiteral(".c")));
         box->setPos(point);
         box->setZValue(1);
         box->setData(0, pathText(file));
         box->setToolTip(pathText(file));
         auto* label = new QGraphicsTextItem(box);
         label->setPlainText(fontMetrics().elidedText(pathText(file.filename()), Qt::ElideMiddle, 170));
-        label->setDefaultTextColor(QColor("#172554"));
         label->setPos(-87, -15);
     }
     scene_->setSceneRect(scene_->itemsBoundingRect().adjusted(-50, -50, 50, 50));
+    recolor();
     fitGraph();
 }
 void GraphPlaceholder::selectFile(const std::filesystem::path& file) {
+    selected_ = pathText(file);
+    recolor();
+}
+// The single place that colours the scene, so a light/dark switch can repaint it.
+void GraphPlaceholder::recolor() {
+    const Theme& t = theme();
+    setBackgroundBrush(QColor(t.graphBg));
     for (auto* item : scene_->items()) {
-        if (auto* box = qgraphicsitem_cast<QGraphicsRectItem*>(item))
-            box->setBrush(box->data(0).toString() == pathText(file) ? QColor("#dbeafe") : QColor(Qt::white));
+        if (auto* box = qgraphicsitem_cast<QGraphicsPathItem*>(item)) {
+            const bool selected = box->data(0).toString() == selected_;
+            box->setBrush(QColor(selected ? t.sel : box->data(1).toBool() ? t.sourceNode : t.node));
+            box->setPen(QPen(QColor(selected ? t.accent : t.edge), selected ? 2 : 1));
+        } else if (auto* text = qgraphicsitem_cast<QGraphicsTextItem*>(item)) {
+            text->setDefaultTextColor(QColor(t.text));
+        } else if (auto* line = qgraphicsitem_cast<QGraphicsLineItem*>(item)) {
+            line->setPen(QPen(QColor(t.edge), 2));
+        } else if (auto* loop = qgraphicsitem_cast<QGraphicsEllipseItem*>(item)) {
+            loop->setPen(QPen(QColor(t.edge), 2));
+        } else if (auto* arrow = qgraphicsitem_cast<QGraphicsPolygonItem*>(item)) {
+            arrow->setBrush(QColor(t.edge));
+        }
     }
 }
 void GraphPlaceholder::fitGraph() { fitInView(scene_->sceneRect(), Qt::KeepAspectRatio); }

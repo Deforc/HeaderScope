@@ -2,17 +2,21 @@
 #include <headerscope/analysis.hpp>
 #include <QFutureWatcher>
 #include <QMainWindow>
+#include <filesystem>
 #include <memory>
+#include <vector>
 
 namespace headerscope { class DependencyGraph; }
 class GraphPlaceholder;
 class QComboBox;
 class QLabel;
 class QLineEdit;
-class QListWidget;
 class QProgressBar;
 class QPushButton;
 class QTreeWidget;
+
+// Fills `tree` with one node per directory (relative to `root`) and file leaves holding the full path in Qt::UserRole.
+void populateFileTree(QTreeWidget* tree, const std::vector<std::filesystem::path>& files, const QString& root);
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -37,7 +41,7 @@ private:
     QPushButton* browse_;
     QPushButton* database_;
     QPushButton* analyze_;
-    QListWidget* files_;
+    QTreeWidget* files_;
     QTreeWidget* dependencies_;
     QTreeWidget* diagnostics_;
     GraphPlaceholder* graph_;
