@@ -25,6 +25,7 @@ GraphPlaceholder::GraphPlaceholder(QWidget* parent) : QGraphicsView(parent), sce
 void GraphPlaceholder::setResult(const headerscope::ScanResult& result) {
     scene_->clear();
     selected_.clear();
+    chain_.clear(); chainFiles_.clear();
     resetTransform();
     std::set<std::filesystem::path> files(result.files.begin(), result.files.end());
     for (const auto& edge : result.edges) {
@@ -56,8 +57,12 @@ void GraphPlaceholder::setResult(const headerscope::ScanResult& result) {
         auto* line = scene_->addLine(QLineF(a, end), QPen(QColor("#64748b"), 2));
         line->setToolTip(pathText(edge.includer) + QStringLiteral(" → ") + pathText(edge.included));
         const QPointF normal(-unit.y(), unit.x());
-        scene_->addPolygon(QPolygonF{end, end - unit * 12 + normal * 5, end - unit * 12 - normal * 5},
-                           QPen(Qt::NoPen), QBrush(QColor("#64748b")));
+        auto* arrow = scene_->addPolygon(QPolygonF{end, end - unit * 12 + normal * 5, end - unit * 12 - normal * 5},
+                                         QPen(Qt::NoPen), QBrush(QColor("#64748b")));
+        for (QGraphicsItem* item : {static_cast<QGraphicsItem*>(line), static_cast<QGraphicsItem*>(arrow)}) {
+            item->setData(2, pathText(edge.includer));
+            item->setData(3, pathText(edge.included));
+        }
     }
     for (const auto& [file, point] : positions) {
         QPainterPath shape;
@@ -78,6 +83,13 @@ void GraphPlaceholder::setResult(const headerscope::ScanResult& result) {
 }
 void GraphPlaceholder::selectFile(const std::filesystem::path& file) {
     selected_ = pathText(file);
+    chain_.clear(); chainFiles_.clear();
+    recolor();
+}
+void GraphPlaceholder::highlightChain(std::set<std::pair<QString, QString>> edges) {
+    chain_ = std::move(edges);
+    chainFiles_.clear();
+    for (const auto& [from, to] : chain_) { chainFiles_.insert(from); chainFiles_.insert(to); }
     recolor();
 }
 // The single place that colours the scene, so a light/dark switch can repaint it.
@@ -87,16 +99,21 @@ void GraphPlaceholder::recolor() {
     for (auto* item : scene_->items()) {
         if (auto* box = qgraphicsitem_cast<QGraphicsPathItem*>(item)) {
             const bool selected = box->data(0).toString() == selected_;
+            const bool onChain = chainFiles_.contains(box->data(0).toString());
             box->setBrush(QColor(selected ? t.sel : box->data(1).toBool() ? t.sourceNode : t.node));
-            box->setPen(QPen(QColor(selected ? t.accent : t.edge), selected ? 2 : 1));
+            box->setPen(QPen(QColor(selected || onChain ? t.accent : t.edge), selected || onChain ? 2 : 1));
         } else if (auto* text = qgraphicsitem_cast<QGraphicsTextItem*>(item)) {
             text->setDefaultTextColor(QColor(t.text));
         } else if (auto* line = qgraphicsitem_cast<QGraphicsLineItem*>(item)) {
-            line->setPen(QPen(QColor(t.edge), 2));
+            const bool on = chain_.contains({line->data(2).toString(), line->data(3).toString()});
+            line->setPen(QPen(QColor(on ? t.accent : t.edge), on ? 3 : 2));
+            line->setZValue(on ? 0.5 : 0); // Above other edges, still under the boxes.
         } else if (auto* loop = qgraphicsitem_cast<QGraphicsEllipseItem*>(item)) {
             loop->setPen(QPen(QColor(t.edge), 2));
         } else if (auto* arrow = qgraphicsitem_cast<QGraphicsPolygonItem*>(item)) {
-            arrow->setBrush(QColor(t.edge));
+            const bool on = chain_.contains({arrow->data(2).toString(), arrow->data(3).toString()});
+            arrow->setBrush(QColor(on ? t.accent : t.edge));
+            arrow->setZValue(on ? 0.5 : 0);
         }
     }
 }

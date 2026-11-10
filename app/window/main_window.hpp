@@ -13,6 +13,7 @@ class QLineEdit;
 class QProgressBar;
 class QPushButton;
 class QTreeWidget;
+class QTreeWidgetItem;
 
 // Fills `tree` with one node per directory (relative to `root`) and file leaves holding the full path in Qt::UserRole.
 void populateFileTree(QTreeWidget* tree, const std::vector<std::filesystem::path>& files, const QString& root);
@@ -33,6 +34,7 @@ private:
     void chooseDatabase();
     void finishAnalysis();
     void updateSelection();
+    void showChain(QTreeWidgetItem* dependent);
     void filterFiles(const QString& text);
     void selectPath(const QString& path);
     void setBusy(bool busy);

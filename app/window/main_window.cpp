@@ -165,6 +165,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(search_, &QLineEdit::textChanged, this, &MainWindow::filterFiles);
     connect(fit, &QPushButton::clicked, graph_, &GraphPlaceholder::fitGraph);
     connect(graph_, &GraphPlaceholder::fileActivated, this, &MainWindow::selectPath);
+    connect(dependencies_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) { showChain(item); });
     connect(dependencies_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* item) {
         if (item->data(0, Qt::UserRole).isValid()) selectPath(item->data(0, Qt::UserRole).toString());
     });
@@ -293,4 +294,27 @@ void MainWindow::updateSelection() {
     if (!outgoing->childCount()) new QTreeWidgetItem(outgoing, {tr("Нет подключений")});
     if (!incoming->childCount()) new QTreeWidgetItem(incoming, {tr("Нет зависимых файлов")});
     dependencies_->expandAll();
+}
+// Highlights every edge lying on some include path from the clicked dependent to the selected file.
+void MainWindow::showChain(QTreeWidgetItem* dependent) {
+    std::set<std::pair<QString, QString>> chain;
+    const auto* row = files_->currentItem();
+    if (dependent && dependent->parent() == dependencies_->topLevelItem(1)
+        && dependent->data(0, Qt::UserRole).isValid() && row && dependencyGraph_) {
+        const auto target = nativePath(row->data(0, Qt::UserRole).toString());
+        const auto upstream = dependencyGraph_->dependents(target);
+        std::set<std::filesystem::path> reachesTarget(upstream.begin(), upstream.end());
+        reachesTarget.insert(target);
+        std::vector<std::filesystem::path> queue{nativePath(dependent->data(0, Qt::UserRole).toString())};
+        std::set<std::filesystem::path> seen(queue.begin(), queue.end());
+        for (std::size_t i = 0; i < queue.size(); ++i) {
+            if (queue[i] == target) continue;
+            for (const auto& next : dependencyGraph_->includes(queue[i])) {
+                if (!reachesTarget.contains(next)) continue;
+                chain.emplace(pathText(queue[i]), pathText(next));
+                if (seen.insert(next).second) queue.push_back(next);
+            }
+        }
+    }
+    graph_->highlightChain(std::move(chain));
 }

@@ -2,6 +2,7 @@
 #include "graph_placeholder.hpp"
 #include <headerscope/demo/fixture.hpp>
 #include <QDir>
+#include <QGraphicsLineItem>
 #include <QGraphicsScene>
 #include <QLineEdit>
 #include <QPushButton>
@@ -52,6 +53,28 @@ private slots:
         QVERIFY(dependents->child(1)->toolTip(0).contains(QStringLiteral("a.h")));
         window.findChild<QLineEdit*>("fileSearch")->setText(QStringLiteral("main"));
         QVERIFY(matches.front()->isHidden());
+    }
+    void dependentChainIsHighlighted() {
+        MainWindow window;
+        // main.cpp → a.h → b.h, plus a.h → extra.h which is off the chain.
+        window.showResult(headerscope::demo::makeIncludeChain(
+            (QDir::tempPath() + QStringLiteral("/HeaderScope-test")).toStdString(), true));
+        auto* files = window.findChild<QTreeWidget*>("filesTree");
+        files->setCurrentItem(files->findItems(QStringLiteral("b.h"), Qt::MatchExactly | Qt::MatchRecursive).front());
+        auto* dependents = window.findChild<QTreeWidget*>("dependenciesTree")->topLevelItem(1);
+        const auto highlighted = [&] {
+            int count = 0;
+            for (auto* item : window.findChild<GraphPlaceholder*>()->scene()->items())
+                if (auto* line = qgraphicsitem_cast<QGraphicsLineItem*>(item)) count += line->pen().width() == 3;
+            return count;
+        };
+        QCOMPARE(highlighted(), 0);
+        for (int i = 0; i < dependents->childCount(); ++i)
+            if (dependents->child(i)->text(0) == QStringLiteral("main.cpp"))
+                window.findChild<QTreeWidget*>("dependenciesTree")->setCurrentItem(dependents->child(i));
+        QCOMPARE(highlighted(), 2);
+        files->setCurrentItem(files->findItems(QStringLiteral("a.h"), Qt::MatchExactly | Qt::MatchRecursive).front());
+        QCOMPARE(highlighted(), 0);
     }
     void fileTreeGroupsByDirectory() {
         QTreeWidget tree;
