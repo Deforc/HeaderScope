@@ -2,13 +2,11 @@
 #include "graph_placeholder.hpp"
 #include "path_utils.hpp"
 #include "theme.hpp"
-#include <headerscope/demo/fixture.hpp>
 #include <headerscope/graph.hpp>
 #if HEADERSCOPE_HAS_SCANNER
 #include <headerscope/scanner.hpp>
 #endif
 #include <QtConcurrent/QtConcurrentRun>
-#include <QComboBox>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -109,20 +107,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     layout->addLayout(controls);
 
     auto* actions = new QHBoxLayout;
-    mode_ = new QComboBox;
-    mode_->setObjectName(QStringLiteral("analysisMode"));
-    mode_->setAccessibleName(tr("Источник данных"));
-    mode_->addItems({tr("Демо: цепочка"), tr("Демо: цикл"), tr("Демо: ошибка заголовка"), tr("Проект · Clang")});
-#if !HEADERSCOPE_HAS_SCANNER
-    mode_->setItemData(3, tr("Нужна сборка с HEADERSCOPE_BUILD_SCANNER=ON"), Qt::ToolTipRole);
-#endif
     analyze_ = new QPushButton(tr("Анализировать"));
     analyze_->setObjectName(QStringLiteral("analyzeButton"));
     analyze_->setDefault(true);
     auto* fit = new QPushButton(tr("Уместить граф"));
-    actions->addWidget(mode_); actions->addWidget(analyze_); actions->addStretch(); actions->addWidget(fit);
+    actions->addWidget(analyze_); actions->addStretch(); actions->addWidget(fit);
     layout->addLayout(actions);
-    summary_ = new QLabel(tr("Выберите проект или запустите демо без настройки Clang."));
+    summary_ = new QLabel(tr("Выберите папку проекта и нажмите «Анализировать»."));
     summary_->setObjectName(QStringLiteral("analysisSummary"));
     summary_->setWordWrap(true); layout->addWidget(summary_);
 
@@ -163,7 +154,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     progress_ = new QProgressBar;
     progress_->setMaximumWidth(180); progress_->setTextVisible(false); progress_->hide();
     statusBar()->addPermanentWidget(progress_);
-    statusBar()->showMessage(tr("Готово · демоданные"));
+    statusBar()->showMessage(tr("Готово"));
 
     connect(browse_, &QPushButton::clicked, this, &MainWindow::chooseProject);
     connect(database_, &QPushButton::clicked, this, &MainWindow::chooseDatabase);
@@ -185,43 +176,30 @@ MainWindow::~MainWindow() = default;
 
 void MainWindow::chooseProject() {
     const auto path = QFileDialog::getExistingDirectory(this, tr("Выберите папку проекта"), project_->text());
-    if (!path.isEmpty()) { project_->setText(path); mode_->setCurrentIndex(3); }
+    if (!path.isEmpty()) { project_->setText(path); runAnalysis(); }
 }
 void MainWindow::chooseDatabase() {
     const auto path = QFileDialog::getOpenFileName(this, tr("База команд компиляции"), project_->text(),
                                                   QStringLiteral("compile_commands.json (compile_commands.json)"));
-    if (!path.isEmpty()) { project_->setText(path); mode_->setCurrentIndex(3); }
+    if (!path.isEmpty()) { project_->setText(path); runAnalysis(); }
 }
 void MainWindow::setBusy(bool busy) {
-    project_->setEnabled(!busy); mode_->setEnabled(!busy); browse_->setEnabled(!busy);
+    project_->setEnabled(!busy); browse_->setEnabled(!busy);
     database_->setEnabled(!busy); analyze_->setEnabled(!busy);
     progress_->setRange(0, busy ? 0 : 1); progress_->setVisible(busy);
     analyze_->setText(busy ? tr("Анализ…") : tr("Анализировать"));
 }
 void MainWindow::runAnalysis() {
     if (!analyze_->isEnabled()) return;
-    const int mode = mode_->currentIndex();
     const QString input = project_->text().trimmed();
     setBusy(true);
     // Clear the old view so a failed scan cannot leave a stale graph on screen.
     result_ = {}; dependencyGraph_.reset(); files_->clear(); dependencies_->clear(); diagnostics_->clear();
     selected_->setText(tr("Выберите файл")); graph_->setResult(result_);
-    summary_->setText(mode == 3 ? tr("Анализ проекта…") : tr("Анализ демонстрационных данных…"));
+    summary_->setText(tr("Анализ проекта…"));
     statusBar()->showMessage(tr("Анализ выполняется в фоне"));
-    watcher_.setFuture(QtConcurrent::run([mode, input]() -> headerscope::ScanResult {
+    watcher_.setFuture(QtConcurrent::run([input]() -> headerscope::ScanResult {
         try {
-            if (mode != 3) {
-                // Fixture paths are synthetic and do not require files on disk.
-                auto result = headerscope::demo::makeIncludeChain(nativePath(QDir::tempPath() + QStringLiteral("/HeaderScope-demo")));
-                const auto root = result.files.front().parent_path();
-                if (mode == 1) result.edges.push_back({root / "b.h", root / "a.h", 4});
-                if (mode == 2) {
-                    result.status = headerscope::ScanStatus::partial;
-                    result.diagnostics.push_back({headerscope::DiagnosticSeverity::error,
-                        "Demo: 'missing.h' file not found", root / "a.h", 8});
-                }
-                return result;
-            }
             if (input.isEmpty()) return failure(tr("Укажите папку проекта или compile_commands.json."));
             QFileInfo info(input);
             if (!info.exists()) return failure(tr("Указанный путь не существует: %1").arg(input));
@@ -231,7 +209,7 @@ void MainWindow::runAnalysis() {
 #if HEADERSCOPE_HAS_SCANNER
             return headerscope::scanIncludes(nativePath(database));
 #else
-            return failure(tr("Сборщик Clang не включён. Соберите с HEADERSCOPE_BUILD_SCANNER=ON или выберите деморежим."));
+            return failure(tr("Сборщик Clang не включён. Соберите с HEADERSCOPE_BUILD_SCANNER=ON."));
 #endif
         } catch (const std::exception& error) {
             return failure(tr("Ошибка анализа: %1").arg(QString::fromUtf8(error.what())));
@@ -239,8 +217,11 @@ void MainWindow::runAnalysis() {
     }));
 }
 void MainWindow::finishAnalysis() {
-    result_ = watcher_.result();
     setBusy(false);
+    showResult(watcher_.result());
+}
+void MainWindow::showResult(headerscope::ScanResult result) {
+    result_ = std::move(result);
     // Normalize the file list at the UI boundary, including edge endpoints.
     std::set<std::filesystem::path> unique(result_.files.begin(), result_.files.end());
     for (const auto& edge : result_.edges) { unique.insert(edge.includer); unique.insert(edge.included); }
@@ -259,8 +240,9 @@ void MainWindow::finishAnalysis() {
         statusBar()->showMessage(tr("Ошибка анализа")); emit analysisFinished(); return;
     }
     dependencyGraph_ = std::make_unique<headerscope::DependencyGraph>(result_);
-    const QString root = mode_->currentIndex() == 3
-        ? (QFileInfo(project_->text()).isDir() ? project_->text() : QFileInfo(project_->text()).absolutePath())
+    const QFileInfo input(project_->text().trimmed());
+    const QString root = input.isDir() ? input.absoluteFilePath()
+        : input.isFile() ? input.absolutePath()
         : pathText(result_.files.empty() ? std::filesystem::path{} : result_.files.front().parent_path());
     populateFileTree(files_, result_.files, root);
     graph_->setResult(result_);
@@ -269,9 +251,8 @@ void MainWindow::finishAnalysis() {
         for (QTreeWidgetItemIterator it(files_); *it; ++it)
             if ((*it)->data(0, Qt::UserRole).isValid()) { files_->setCurrentItem(*it); break; }
     const QString status = result_.status == headerscope::ScanStatus::partial ? tr("Частичный анализ") : tr("Анализ завершён");
-    summary_->setText(tr("%1 · %2 файлов · %3 директив #include · %4 сообщений%5")
-        .arg(status).arg(result_.files.size()).arg(result_.edges.size()).arg(result_.diagnostics.size())
-        .arg(mode_->currentIndex() == 3 ? QString() : tr(" · ДЕМОДАННЫЕ")));
+    summary_->setText(tr("%1 · %2 файлов · %3 директив #include · %4 сообщений")
+        .arg(status).arg(result_.files.size()).arg(result_.edges.size()).arg(result_.diagnostics.size()));
     statusBar()->showMessage(status); emit analysisFinished();
 }
 void MainWindow::filterFiles(const QString& text) {

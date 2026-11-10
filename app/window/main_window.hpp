@@ -8,7 +8,6 @@
 
 namespace headerscope { class DependencyGraph; }
 class GraphPlaceholder;
-class QComboBox;
 class QLabel;
 class QLineEdit;
 class QProgressBar;
@@ -25,6 +24,8 @@ public:
     ~MainWindow() override;
 public slots:
     void runAnalysis();
+    // Displays a finished scan; analysis runs call this, tests may feed results directly.
+    void showResult(headerscope::ScanResult result);
 signals:
     void analysisFinished();
 private:
@@ -37,7 +38,6 @@ private:
     void setBusy(bool busy);
     QLineEdit* project_;
     QLineEdit* search_;
-    QComboBox* mode_;
     QPushButton* browse_;
     QPushButton* database_;
     QPushButton* analyze_;

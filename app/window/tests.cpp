@@ -1,6 +1,7 @@
 #include "main_window.hpp"
 #include "graph_placeholder.hpp"
-#include <QComboBox>
+#include <headerscope/demo/fixture.hpp>
+#include <QDir>
 #include <QGraphicsScene>
 #include <QLineEdit>
 #include <QPushButton>
@@ -16,12 +17,15 @@ int leafCount(QTreeWidget* tree) {
     for (QTreeWidgetItemIterator it(tree); *it; ++it) count += (*it)->childCount() == 0;
     return count;
 }
+headerscope::ScanResult chain() {
+    return headerscope::demo::makeIncludeChain((QDir::tempPath() + QStringLiteral("/HeaderScope-test")).toStdString());
+}
 }
 
 class WindowTests : public QObject {
     Q_OBJECT
 private slots:
-    void demoDependencies() {
+    void busyBlocksSecondRun() {
         MainWindow window;
         QSignalSpy done(&window, &MainWindow::analysisFinished);
         window.runAnalysis();
@@ -29,6 +33,10 @@ private slots:
         window.runAnalysis(); // A second request must not start another worker.
         QTRY_COMPARE(done.count(), 1);
         QVERIFY(window.findChild<QPushButton*>("analyzeButton")->isEnabled());
+    }
+    void dependencies() {
+        MainWindow window;
+        window.showResult(chain());
         auto* files = window.findChild<QTreeWidget*>("filesTree");
         QCOMPARE(leafCount(files), 3);
         const auto matches = files->findItems(QStringLiteral("b.h"), Qt::MatchExactly | Qt::MatchRecursive);
@@ -61,9 +69,7 @@ private slots:
     }
     void searchHidesEmptyDirectories() {
         MainWindow window;
-        QSignalSpy done(&window, &MainWindow::analysisFinished);
-        window.runAnalysis();
-        QTRY_COMPARE(done.count(), 1);
+        window.showResult(chain());
         auto* search = window.findChild<QLineEdit*>("fileSearch");
         search->setText(QStringLiteral("no-such-file"));
         auto* files = window.findChild<QTreeWidget*>("filesTree");
@@ -73,10 +79,11 @@ private slots:
     }
     void partialScanKeepsGraph() {
         MainWindow window;
-        window.findChild<QComboBox*>("analysisMode")->setCurrentIndex(2);
-        QSignalSpy done(&window, &MainWindow::analysisFinished);
-        window.runAnalysis();
-        QTRY_COMPARE(done.count(), 1);
+        auto result = chain();
+        result.status = headerscope::ScanStatus::partial;
+        result.diagnostics.push_back({headerscope::DiagnosticSeverity::error,
+            "'missing.h' file not found", result.files.front().parent_path() / "a.h", 8});
+        window.showResult(result);
         QCOMPARE(leafCount(window.findChild<QTreeWidget*>("filesTree")), 3);
         auto* diagnostics = window.findChild<QTreeWidget*>("diagnosticsTree");
         QCOMPARE(diagnostics->topLevelItemCount(), 1);
@@ -85,13 +92,10 @@ private slots:
     }
     void failureClearsPreviousResult() {
         MainWindow window;
+        window.showResult(chain());
         QSignalSpy done(&window, &MainWindow::analysisFinished);
         window.runAnalysis();
         QTRY_COMPARE(done.count(), 1);
-        window.findChild<QComboBox*>("analysisMode")->setCurrentIndex(3);
-        window.findChild<QLineEdit*>("projectPath")->clear();
-        window.runAnalysis();
-        QTRY_COMPARE(done.count(), 2);
         QCOMPARE(leafCount(window.findChild<QTreeWidget*>("filesTree")), 0);
         QCOMPARE(window.findChild<QTreeWidget*>("dependenciesTree")->topLevelItemCount(), 0);
         QCOMPARE(window.findChild<QTreeWidget*>("diagnosticsTree")->topLevelItemCount(), 1);
@@ -101,7 +105,6 @@ private slots:
         QTemporaryDir project;
         QVERIFY(project.isValid());
         MainWindow window;
-        window.findChild<QComboBox*>("analysisMode")->setCurrentIndex(3);
         window.findChild<QLineEdit*>("projectPath")->setText(project.path());
         QSignalSpy done(&window, &MainWindow::analysisFinished);
         window.runAnalysis();
@@ -112,10 +115,10 @@ private slots:
     }
     void cycleCanBeDisplayed() {
         MainWindow window;
-        window.findChild<QComboBox*>("analysisMode")->setCurrentIndex(1);
-        QSignalSpy done(&window, &MainWindow::analysisFinished);
-        window.runAnalysis();
-        QTRY_COMPARE(done.count(), 1);
+        auto result = chain();
+        const auto root = result.files.front().parent_path();
+        result.edges.push_back({root / "b.h", root / "a.h", 4});
+        window.showResult(result);
         QCOMPARE(leafCount(window.findChild<QTreeWidget*>("filesTree")), 3);
         QVERIFY(!window.findChild<GraphPlaceholder*>()->scene()->items().empty());
     }
