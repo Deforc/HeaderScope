@@ -1,12 +1,12 @@
 #pragma once
 #include <headerscope/analysis.hpp>
+#include <headerscope/graph.hpp>
 #include <QFutureWatcher>
 #include <QMainWindow>
 #include <filesystem>
 #include <memory>
 #include <vector>
 
-namespace headerscope { class DependencyGraph; }
 class GraphPlaceholder;
 class QLabel;
 class QLineEdit;
@@ -32,13 +32,24 @@ public slots:
 signals:
     void analysisFinished();
 private:
+    struct CycleDetails {
+        std::size_t fileCount;
+        std::vector<headerscope::FileChain> chains;
+    };
+    struct AnalysisResult {
+        headerscope::ScanResult scan;
+        std::shared_ptr<const headerscope::DependencyGraph> graph;
+        std::vector<CycleDetails> groups;
+    };
+    static AnalysisResult prepareAnalysis(headerscope::ScanResult scan);
+    void showAnalysis(AnalysisResult analysis);
     void chooseProject();
     void chooseDatabase();
     void finishAnalysis();
     void updateSelection();
     void showChain(QTreeWidgetItem* dependent);
-    std::size_t showCycles(); // Returns the number of cyclic groups.
-    void showCycle(QTreeWidgetItem* item);
+    void showCycles(const std::vector<CycleDetails>& groups);
+    void updateCycleFocus();
     void filterFiles(const QString& text);
     void selectPath(const QString& path);
     void setBusy(bool busy);
@@ -47,6 +58,7 @@ private:
     QPushButton* browse_;
     QPushButton* database_;
     QPushButton* analyze_;
+    QPushButton* allCycles_;
     QTreeWidget* files_;
     QTreeWidget* dependencies_;
     QTreeWidget* diagnostics_;
@@ -59,7 +71,7 @@ private:
     QLabel* cycleBadge_;
     QStackedWidget* details_;
     QProgressBar* progress_;
-    QFutureWatcher<headerscope::ScanResult> watcher_;
+    QFutureWatcher<AnalysisResult> watcher_;
     headerscope::ScanResult result_;
-    std::unique_ptr<headerscope::DependencyGraph> dependencyGraph_;
+    std::shared_ptr<const headerscope::DependencyGraph> dependencyGraph_;
 };

@@ -2,7 +2,6 @@
 #include "graph_placeholder.hpp"
 #include "path_utils.hpp"
 #include "theme.hpp"
-#include <headerscope/graph.hpp>
 #if HEADERSCOPE_HAS_SCANNER
 #include <headerscope/scanner.hpp>
 #endif
@@ -12,22 +11,98 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QHeaderView>
+#include <QIcon>
+#include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
+#include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
+#include <QStyledItemDelegate>
 #include <QTabBar>
+#include <QTextLayout>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <cmath>
 #include <exception>
+#include <iterator>
 #include <set>
 
 namespace {
+enum CycleRowRole { CycleFiles = Qt::UserRole, CycleColor };
+
+class CycleRowDelegate final : public QStyledItemDelegate {
+public:
+    explicit CycleRowDelegate(QTreeWidget* tree) : QStyledItemDelegate(tree), tree_(tree) {}
+
+    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        auto row = option;
+        initStyleOption(&row, index);
+        const int indent = tree_->indentation() * (index.parent().isValid() ? 2 : 1);
+        const int width = tree_->columnWidth(0) - indent - textInset(row.icon) - padding;
+        QTextLayout layout(row.text, row.font);
+        layout.setTextOption(wrapping());
+        qreal height = 0;
+        layout.beginLayout();
+        for (auto line = layout.createLine(); line.isValid(); line = layout.createLine()) {
+            line.setLineWidth(std::max(1, width));
+            height += line.height();
+        }
+        layout.endLayout();
+        return {0, std::max(markerSize, int(std::ceil(height))) + 2 * padding};
+    }
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        auto row = option;
+        initStyleOption(&row, index);
+        const auto text = row.text;
+        const auto icon = row.icon;
+        row.text.clear();
+        row.icon = QIcon{};
+        tree_->style()->drawControl(QStyle::CE_ItemViewItem, &row, painter, tree_);
+
+        painter->save();
+        painter->setClipRect(row.rect, Qt::IntersectClip);
+        const QRect marker(row.rect.x() + padding, row.rect.y() + padding + 2, markerSize, markerSize);
+        icon.paint(painter, marker);
+        painter->setFont(row.font);
+        painter->setPen(QColor(theme().text));
+        const auto textRect = row.rect.adjusted(textInset(icon), padding, -padding, -padding);
+        painter->drawText(QRectF(textRect), text, wrapping());
+        painter->restore();
+    }
+
+private:
+    static constexpr int padding = 6;
+    static constexpr int markerSize = 12;
+
+    static int textInset(const QIcon& icon) {
+        return icon.isNull() ? padding : 2 * padding + markerSize;
+    }
+    static QTextOption wrapping() {
+        QTextOption option(Qt::AlignLeft | Qt::AlignTop);
+        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        return option;
+    }
+
+    const QTreeWidget* tree_;
+};
+
+QColor cycleColor(std::size_t index) {
+    static const QColor palette[] = {
+        QColor("#3478e5"), QColor("#d9790d"), QColor("#a34bd9"),
+        QColor("#078a63"), QColor("#d94779"), QColor("#008f9f")
+    };
+    if (index < std::size(palette)) return palette[index];
+    return QColor::fromHsv(int((index % 360 * 137) % 360), 190, 205);
+}
+
 headerscope::ScanResult failure(const QString& message) {
     headerscope::ScanResult result;
     result.diagnostics.push_back({headerscope::DiagnosticSeverity::error,
@@ -162,15 +237,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     headerLayout->addWidget(selected_); headerLayout->addWidget(selectedPath_);
     cycles_ = new QTreeWidget;
     cycles_->setObjectName(QStringLiteral("cyclesTree"));
-    cycles_->setHeaderLabels({tr("Группа / файл"), tr("Замкнутая цепочка")});
-    cycles_->header()->setSectionResizeMode(1, QHeaderView::Stretch);
-    cycles_->setColumnWidth(0, 200);
+    cycles_->setColumnCount(1);
+    cycles_->setHeaderHidden(true);
+    cycles_->header()->setSectionResizeMode(QHeaderView::Stretch);
+    cycles_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    cycles_->setIndentation(14);
+    cycles_->setItemDelegate(new CycleRowDelegate(cycles_));
     cycles_->setAccessibleName(tr("Циклические группы"));
+    allCycles_ = new QPushButton(tr("Показать все циклы"));
+    allCycles_->setObjectName(QStringLiteral("allCyclesButton"));
+    allCycles_->setEnabled(false);
     // The right column describes whatever the tab above the graph shows.
     details_ = new QStackedWidget;
     details_->setObjectName(QStringLiteral("details"));
     details_->addWidget(panel(tr("ЗАВИСИМОСТИ"), dependencies_, header));
-    details_->addWidget(panel(tr("ЦИКЛЫ · алгоритм Тарьяна"), cycles_));
+    details_->addWidget(panel(tr("ЦИКЛИЧЕСКИЕ ЗАВИСИМОСТИ"), cycles_, allCycles_));
     horizontal->addWidget(details_);
     horizontal->setStretchFactor(0, 1); horizontal->setStretchFactor(1, 3); horizontal->setStretchFactor(2, 2);
     horizontal->setSizes({220, 580, 360}); horizontal->setChildrenCollapsible(false);
@@ -194,7 +275,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(database_, &QPushButton::clicked, this, &MainWindow::chooseDatabase);
     connect(analyze_, &QPushButton::clicked, this, &MainWindow::runAnalysis);
     connect(project_, &QLineEdit::returnPressed, this, &MainWindow::runAnalysis);
-    connect(&watcher_, &QFutureWatcher<headerscope::ScanResult>::finished, this, &MainWindow::finishAnalysis);
+    connect(&watcher_, &QFutureWatcher<AnalysisResult>::finished, this, &MainWindow::finishAnalysis);
     connect(files_, &QTreeWidget::currentItemChanged, this, &MainWindow::updateSelection);
     connect(search_, &QLineEdit::textChanged, this, &MainWindow::filterFiles);
     connect(fit, &QPushButton::clicked, graph_, &GraphPlaceholder::fitGraph);
@@ -202,17 +283,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(dependencies_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) {
         if (tabs_->currentIndex() == 0) showChain(item);
     });
-    connect(cycles_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) {
-        if (tabs_->currentIndex() == 1) showCycle(item);
-    });
+    connect(cycles_->header(), &QHeaderView::sectionResized, cycles_, &QTreeWidget::doItemsLayout, Qt::QueuedConnection);
+    connect(cycles_, &QTreeWidget::itemSelectionChanged, this, &MainWindow::updateCycleFocus);
+    connect(allCycles_, &QPushButton::clicked, cycles_->selectionModel(), &QItemSelectionModel::clear);
     connect(tabs_, &QTabBar::currentChanged, this, [this](int index) {
         details_->setCurrentIndex(index);
-        if (index) showCycle(cycles_->currentItem()); else showChain(dependencies_->currentItem());
+        if (index == 0) showChain(dependencies_->currentItem());
+        graph_->showCycleHighlights(index == 1);
     });
     const auto activate = [this](QTreeWidgetItem* item) {
         if (item->data(0, Qt::UserRole).isValid()) selectPath(item->data(0, Qt::UserRole).toString());
     };
-    for (auto* tree : {dependencies_, diagnostics_, cycles_}) connect(tree, &QTreeWidget::itemActivated, this, activate);
+    for (auto* tree : {dependencies_, diagnostics_}) connect(tree, &QTreeWidget::itemActivated, this, activate);
 }
 MainWindow::~MainWindow() = default;
 
@@ -237,34 +319,49 @@ void MainWindow::runAnalysis() {
     setBusy(true);
     // Clear the old view so a failed scan cannot leave a stale graph on screen.
     result_ = {}; dependencyGraph_.reset(); files_->clear(); dependencies_->clear(); diagnostics_->clear(); cycles_->clear();
+    updateCycleFocus();
     selected_->setText(tr("Выберите файл")); selectedPath_->clear(); cycleBadge_->setText(QStringLiteral("0"));
     graph_->setResult(result_);
     summary_->setText(tr("Анализ проекта…"));
     statusBar()->showMessage(tr("Анализ выполняется в фоне"));
-    watcher_.setFuture(QtConcurrent::run([input]() -> headerscope::ScanResult {
+    watcher_.setFuture(QtConcurrent::run([input]() -> AnalysisResult {
+        const auto failed = [](const QString& message) { return AnalysisResult{failure(message), {}, {}}; };
         try {
-            if (input.isEmpty()) return failure(tr("Укажите папку проекта или compile_commands.json."));
+            if (input.isEmpty()) return failed(tr("Укажите папку проекта или compile_commands.json."));
             QFileInfo info(input);
-            if (!info.exists()) return failure(tr("Указанный путь не существует: %1").arg(input));
+            if (!info.exists()) return failed(tr("Указанный путь не существует: %1").arg(input));
             QString database = info.isDir() ? QDir(input).filePath(QStringLiteral("compile_commands.json")) : info.absoluteFilePath();
             if (!QFileInfo(database).isFile())
-                return failure(tr("Не найден compile_commands.json. Выберите его в каталоге сборки кнопкой выше."));
+                return failed(tr("Не найден compile_commands.json. Выберите его в каталоге сборки кнопкой выше."));
 #if HEADERSCOPE_HAS_SCANNER
-            return headerscope::scanIncludes(nativePath(database));
+            return prepareAnalysis(headerscope::scanIncludes(nativePath(database)));
 #else
-            return failure(tr("Сборщик Clang не включён. Соберите с HEADERSCOPE_BUILD_SCANNER=ON."));
+            return failed(tr("Сборщик Clang не включён. Соберите с HEADERSCOPE_BUILD_SCANNER=ON."));
 #endif
         } catch (const std::exception& error) {
-            return failure(tr("Ошибка анализа: %1").arg(QString::fromUtf8(error.what())));
-        } catch (...) { return failure(tr("Неизвестная ошибка анализа.")); }
+            return failed(tr("Ошибка анализа: %1").arg(QString::fromUtf8(error.what())));
+        } catch (...) { return failed(tr("Неизвестная ошибка анализа.")); }
     }));
 }
 void MainWindow::finishAnalysis() {
     setBusy(false);
-    showResult(watcher_.result());
+    showAnalysis(watcher_.future().takeResult());
 }
 void MainWindow::showResult(headerscope::ScanResult result) {
-    result_ = std::move(result);
+    showAnalysis(prepareAnalysis(std::move(result)));
+}
+MainWindow::AnalysisResult MainWindow::prepareAnalysis(headerscope::ScanResult scan) {
+    AnalysisResult analysis{std::move(scan), {}, {}};
+    if (analysis.scan.status != headerscope::ScanStatus::failed) {
+        analysis.graph = std::make_shared<headerscope::DependencyGraph>(analysis.scan);
+        for (const auto& group : analysis.graph->cycles()) {
+            analysis.groups.push_back({group.members.size(), analysis.graph->simpleCycles(group)});
+        }
+    }
+    return analysis;
+}
+void MainWindow::showAnalysis(AnalysisResult analysis) {
+    result_ = std::move(analysis.scan);
     // Normalize the file list at the UI boundary, including edge endpoints.
     std::set<std::filesystem::path> unique(result_.files.begin(), result_.files.end());
     for (const auto& edge : result_.edges) { unique.insert(edge.includer); unique.insert(edge.included); }
@@ -282,14 +379,14 @@ void MainWindow::showResult(headerscope::ScanResult result) {
         summary_->setText(tr("Анализ не выполнен. Подробности в диагностике."));
         statusBar()->showMessage(tr("Ошибка анализа")); emit analysisFinished(); return;
     }
-    dependencyGraph_ = std::make_unique<headerscope::DependencyGraph>(result_);
+    dependencyGraph_ = std::move(analysis.graph);
     const QFileInfo input(project_->text().trimmed());
     const QString root = input.isDir() ? input.absoluteFilePath()
         : input.isFile() ? input.absolutePath()
         : pathText(result_.files.empty() ? std::filesystem::path{} : result_.files.front().parent_path());
     populateFileTree(files_, result_.files, root);
     graph_->setResult(result_);
-    const std::size_t cycleCount = showCycles();
+    showCycles(analysis.groups);
     filterFiles(search_->text());
     if (!files_->currentItem())
         for (QTreeWidgetItemIterator it(files_); *it; ++it)
@@ -297,7 +394,7 @@ void MainWindow::showResult(headerscope::ScanResult result) {
     const QString status = result_.status == headerscope::ScanStatus::partial ? tr("Частичный анализ") : tr("Анализ завершён");
     summary_->setText(tr("%1 · %2 файлов · %3 директив #include · %4 циклических групп · %5 сообщений")
         .arg(status).arg(result_.files.size()).arg(result_.edges.size())
-        .arg(cycleCount).arg(result_.diagnostics.size()));
+        .arg(analysis.groups.size()).arg(result_.diagnostics.size()));
     statusBar()->showMessage(status); emit analysisFinished();
 }
 void MainWindow::filterFiles(const QString& text) {
@@ -372,32 +469,51 @@ void MainWindow::showChain(QTreeWidgetItem* dependent) {
     }
     graph_->highlightChain(std::move(chain));
 }
-// Lists Tarjan's strongly connected groups; each group keeps one closed example chain for highlighting.
-std::size_t MainWindow::showCycles() {
+void MainWindow::showCycles(const std::vector<CycleDetails>& groups) {
     cycles_->clear();
-    const auto groups = dependencyGraph_->cycles();
+    updateCycleFocus();
+    GraphPlaceholder::EdgeColors edgeColors;
+    std::size_t cycleCount = 0;
     for (std::size_t i = 0; i < groups.size(); ++i) {
-        QStringList names, paths;
-        for (const auto& step : groups[i].example) { names << pathText(step.filename()); paths << pathText(step); }
-        auto* group = new QTreeWidgetItem(cycles_, {tr("Группа %1 · %2 файлов").arg(i + 1).arg(groups[i].members.size()),
-                                                    names.join(QStringLiteral(" → "))});
-        group->setData(0, Qt::UserRole + 1, paths);
-        group->setToolTip(1, paths.join(QStringLiteral(" → ")));
-        for (const auto& member : groups[i].members) {
-            auto* item = new QTreeWidgetItem(group, {pathText(member.filename())});
-            item->setData(0, Qt::UserRole, pathText(member)); item->setToolTip(0, pathText(member));
+        const auto& [fileCount, chains] = groups[i];
+        auto* group = new QTreeWidgetItem(cycles_, {tr("Группа %1 · файлов: %2 · циклов: %3")
+                                                   .arg(i + 1).arg(fileCount).arg(chains.size())});
+        group->setFlags(Qt::ItemIsEnabled);
+        auto groupFont = group->font(0);
+        groupFont.setBold(true);
+        group->setFont(0, groupFont);
+        for (const auto& chain : chains) {
+            const auto color = cycleColor(cycleCount++);
+            QStringList names, paths;
+            for (const auto& step : chain) {
+                names << pathText(step.filename());
+                paths << pathText(step);
+            }
+            auto* cycle = new QTreeWidgetItem(group, {names.join(QStringLiteral(" → "))});
+            QPixmap marker(12, 12);
+            marker.fill(color);
+            cycle->setIcon(0, QIcon(marker));
+            cycle->setToolTip(0, paths.join(QStringLiteral(" → ")));
+            cycle->setData(0, CycleFiles, paths);
+            cycle->setData(0, CycleColor, color);
+            for (qsizetype k = 0; k + 1 < paths.size(); ++k) {
+                edgeColors[{paths[k], paths[k + 1]}].push_back(color);
+            }
         }
     }
-    if (groups.empty()) new QTreeWidgetItem(cycles_, {tr("Циклов не найдено")});
+    if (groups.empty()) {
+        auto* empty = new QTreeWidgetItem(cycles_, {tr("Циклов не найдено")});
+        empty->setFlags(Qt::ItemIsEnabled);
+    }
     cycles_->expandAll();
-    cycleBadge_->setText(QString::number(groups.size()));
-    return groups.size();
+    cycleBadge_->setText(QString::number(cycleCount));
+    graph_->setCycleHighlights(std::move(edgeColors));
 }
-// Highlights the example closed chain of the group that `item` belongs to.
-void MainWindow::showCycle(QTreeWidgetItem* item) {
-    std::set<std::pair<QString, QString>> chain;
-    if (item && item->parent()) item = item->parent();
-    const QStringList paths = item ? item->data(0, Qt::UserRole + 1).toStringList() : QStringList();
-    for (qsizetype i = 0; i + 1 < paths.size(); ++i) chain.emplace(paths[i], paths[i + 1]);
-    graph_->highlightChain(std::move(chain));
+void MainWindow::updateCycleFocus() {
+    const auto selection = cycles_->selectedItems();
+    const auto* item = selection.isEmpty() ? nullptr : selection.front();
+    const auto files = item ? item->data(0, CycleFiles).toStringList() : QStringList{};
+    const auto color = item ? item->data(0, CycleColor).value<QColor>() : QColor{};
+    allCycles_->setEnabled(!files.isEmpty());
+    graph_->focusCycle(files, color);
 }

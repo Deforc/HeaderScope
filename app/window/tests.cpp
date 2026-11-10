@@ -2,6 +2,7 @@
 #include "graph_placeholder.hpp"
 #include <headerscope/demo/fixture.hpp>
 #include <QDir>
+#include <QFileInfo>
 #include <QGraphicsLineItem>
 #include <QGraphicsScene>
 #include <QLabel>
@@ -23,6 +24,19 @@ int leafCount(QTreeWidget* tree) {
 }
 headerscope::ScanResult chain() {
     return headerscope::demo::makeIncludeChain((QDir::tempPath() + QStringLiteral("/HeaderScope-test")).toStdString());
+}
+const QGraphicsLineItem* edgeLine(const MainWindow& window, const QString& from, const QString& to) {
+    for (auto* item : window.findChild<GraphPlaceholder*>()->scene()->items()) {
+        if (const auto* line = qgraphicsitem_cast<QGraphicsLineItem*>(item);
+            line && QFileInfo(line->data(2).toString()).fileName() == from
+                 && QFileInfo(line->data(3).toString()).fileName() == to) {
+            return line;
+        }
+    }
+    return nullptr;
+}
+QColor markerColor(const QTreeWidgetItem* cycle) {
+    return cycle->icon(0).pixmap(12, 12).toImage().pixelColor(6, 6);
 }
 }
 
@@ -139,33 +153,104 @@ private slots:
         QVERIFY(diagnostic);
         QVERIFY(diagnostic->text(1).contains(QStringLiteral("compile_commands.json")));
     }
-    void cycleCanBeDisplayed() {
+    void allCyclesInOneGroupAreHighlighted() {
         MainWindow window;
+        window.show();
         auto result = chain();
         const auto root = result.files.front().parent_path();
         result.edges.push_back({root / "b.h", root / "a.h", 4});
+        result.edges.push_back({root / "b.h", root / "extra.h", 5});
+        result.edges.push_back({root / "extra.h", root / "new.h", 2});
+        result.edges.push_back({root / "new.h", root / "b.h", 2});
         window.showResult(result);
-        QCOMPARE(leafCount(window.findChild<QTreeWidget*>("filesTree")), 3);
+        QCOMPARE(leafCount(window.findChild<QTreeWidget*>("filesTree")), 5);
         QVERIFY(!window.findChild<GraphPlaceholder*>()->scene()->items().empty());
         auto* cycles = window.findChild<QTreeWidget*>("cyclesTree");
         QCOMPARE(cycles->topLevelItemCount(), 1);
         auto* group = cycles->topLevelItem(0);
-        QCOMPARE(group->childCount(), 2); // a.h and b.h
-        QCOMPARE(group->text(1), QStringLiteral("a.h → b.h → a.h"));
-        const auto highlighted = [&] {
-            int count = 0;
-            for (auto* item : window.findChild<GraphPlaceholder*>()->scene()->items())
-                if (auto* line = qgraphicsitem_cast<QGraphicsLineItem*>(item)) count += line->pen().width() == 3;
-            return count;
-        };
-        QCOMPARE(window.findChild<QLabel*>("tabBadge")->text(), QStringLiteral("1"));
+        QCOMPARE(group->childCount(), 2);
+        QCOMPARE(group->child(0)->text(0), QStringLiteral("a.h → b.h → a.h"));
+        QCOMPARE(group->child(1)->text(0), QStringLiteral("b.h → extra.h → new.h → b.h"));
+        const auto first = markerColor(group->child(0));
+        const auto second = markerColor(group->child(1));
+        QVERIFY(first.isValid() && second.isValid() && first != second);
+        const auto* ab = edgeLine(window, "a.h", "b.h");
+        const auto* ba = edgeLine(window, "b.h", "a.h");
+        const auto* be = edgeLine(window, "b.h", "extra.h");
+        const auto* en = edgeLine(window, "extra.h", "new.h");
+        const auto* nb = edgeLine(window, "new.h", "b.h");
+        const auto* main = edgeLine(window, "main.cpp", "a.h");
+        QVERIFY(ab && ba && be && en && nb && main);
+        const auto normalColor = ab->pen().color();
+        QCOMPARE(window.findChild<QLabel*>("tabBadge")->text(), QStringLiteral("2"));
         auto* details = window.findChild<QStackedWidget*>("details");
         QCOMPARE(details->currentIndex(), 0);
-        window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(1); // The right column follows the tab.
+        auto* tabs = window.findChild<QTabBar*>("viewTabs");
+        tabs->setCurrentIndex(1);
         QCOMPARE(details->currentIndex(), 1);
-        QCOMPARE(highlighted(), 0);
-        cycles->setCurrentItem(group->child(1)); // A member selects its whole group's chain.
-        QCOMPARE(highlighted(), 2);
+        QCOMPARE(ab->pen().color(), first);
+        QCOMPARE(ba->pen().color(), first);
+        QCOMPARE(be->pen().color(), second);
+        QCOMPARE(en->pen().color(), second);
+        QCOMPARE(nb->pen().color(), second);
+        QCOMPARE(main->pen().color(), normalColor);
+        auto* reset = window.findChild<QPushButton*>("allCyclesButton");
+        QVERIFY(!reset->isEnabled());
+        QTRY_VERIFY(cycles->visualItemRect(group->child(1)).isValid());
+        QTest::mouseClick(cycles->viewport(), Qt::LeftButton, Qt::NoModifier,
+                         cycles->visualItemRect(group->child(1)).center());
+        QVERIFY(reset->isEnabled());
+        QCOMPARE(ab->pen().color(), normalColor);
+        QCOMPARE(be->pen().color(), second);
+        QCOMPARE(be->pen().width(), 5);
+        QTest::mouseClick(reset, Qt::LeftButton);
+        QVERIFY(!reset->isEnabled());
+        QCOMPARE(ab->pen().color(), first);
+        QCOMPARE(be->pen().color(), second);
+        tabs->setCurrentIndex(0);
+        QCOMPARE(ab->pen().color(), normalColor);
+        QCOMPARE(be->pen().color(), normalColor);
+    }
+    void longCycleWrapsWhenThePanelNarrows() {
+        MainWindow window;
+        window.show();
+        auto result = chain();
+        const auto root = result.files.front().parent_path();
+        const auto longHeader = root / "very_long_configuration_header_for_dashboard_reporting_and_export.h";
+        result.edges.push_back({root / "b.h", longHeader, 2});
+        result.edges.push_back({longHeader, root / "a.h", 2});
+        window.showResult(result);
+        window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(1);
+        auto* cycles = window.findChild<QTreeWidget*>("cyclesTree");
+        const auto* cycle = cycles->topLevelItem(0)->child(0);
+        QVERIFY(cycle);
+        QCOMPARE(cycles->columnCount(), 1);
+        cycles->setFixedWidth(420);
+        QTRY_VERIFY(cycles->visualItemRect(cycle).height() > 0);
+        const int wideHeight = cycles->visualItemRect(cycle).height();
+        cycles->setFixedWidth(185);
+        QTRY_VERIFY(cycles->visualItemRect(cycle).height() > wideHeight);
+    }
+    void sharedEdgeUsesBothCycleColors() {
+        MainWindow window;
+        auto result = chain();
+        const auto root = result.files.front().parent_path();
+        result.edges.push_back({root / "b.h", root / "a.h", 4});
+        result.edges.push_back({root / "b.h", root / "extra.h", 5});
+        result.edges.push_back({root / "extra.h", root / "a.h", 2});
+        window.showResult(result);
+        window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(1);
+        const auto* group = window.findChild<QTreeWidget*>("cyclesTree")->topLevelItem(0);
+        const auto* shared = edgeLine(window, "a.h", "b.h");
+        const auto* reverse = edgeLine(window, "b.h", "a.h");
+        QVERIFY(group && shared && reverse);
+        const auto brush = shared->pen().brush();
+        QVERIFY(brush.gradient());
+        const auto stops = brush.gradient()->stops();
+        QCOMPARE(stops.front().second, markerColor(group->child(0)));
+        QCOMPARE(stops.back().second, markerColor(group->child(1)));
+        QCOMPARE(reverse->pen().color(), markerColor(group->child(0)));
+        QVERIFY(shared->line().p1().y() != reverse->line().p1().y());
     }
     void acyclicHasNoCycleGroups() {
         MainWindow window;
