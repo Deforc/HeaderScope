@@ -144,6 +144,27 @@ private slots:
         window.showResult(result);
         QCOMPARE(leafCount(window.findChild<QTreeWidget*>("filesTree")), 3);
         QVERIFY(!window.findChild<GraphPlaceholder*>()->scene()->items().empty());
+        auto* cycles = window.findChild<QTreeWidget*>("cyclesTree");
+        QCOMPARE(cycles->topLevelItemCount(), 1);
+        auto* group = cycles->topLevelItem(0);
+        QCOMPARE(group->childCount(), 2); // a.h and b.h
+        QCOMPARE(group->text(1), QStringLiteral("a.h → b.h → a.h"));
+        const auto highlighted = [&] {
+            int count = 0;
+            for (auto* item : window.findChild<GraphPlaceholder*>()->scene()->items())
+                if (auto* line = qgraphicsitem_cast<QGraphicsLineItem*>(item)) count += line->pen().width() == 3;
+            return count;
+        };
+        QCOMPARE(highlighted(), 0);
+        cycles->setCurrentItem(group->child(1)); // A member selects its whole group's chain.
+        QCOMPARE(highlighted(), 2);
+    }
+    void acyclicHasNoCycleGroups() {
+        MainWindow window;
+        window.showResult(chain());
+        auto* cycles = window.findChild<QTreeWidget*>("cyclesTree");
+        QCOMPARE(cycles->topLevelItemCount(), 1);
+        QCOMPARE(cycles->topLevelItem(0)->childCount(), 0); // "Циклов не найдено"
     }
 };
 QTEST_MAIN(WindowTests)

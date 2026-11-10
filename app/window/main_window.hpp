@@ -35,6 +35,8 @@ private:
     void finishAnalysis();
     void updateSelection();
     void showChain(QTreeWidgetItem* dependent);
+    std::size_t showCycles(); // Returns the number of cyclic groups.
+    void showCycle(QTreeWidgetItem* item);
     void filterFiles(const QString& text);
     void selectPath(const QString& path);
     void setBusy(bool busy);
@@ -46,6 +48,7 @@ private:
     QTreeWidget* files_;
     QTreeWidget* dependencies_;
     QTreeWidget* diagnostics_;
+    QTreeWidget* cycles_;
     GraphPlaceholder* graph_;
     QLabel* summary_;
     QLabel* selected_;

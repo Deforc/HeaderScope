@@ -45,7 +45,8 @@ void GraphPlaceholder::setResult(const headerscope::ScanResult& result) {
         if (!drawn.emplace(edge.includer, edge.included).second) continue;
         const QPointF a = positions.at(edge.includer), b = positions.at(edge.included);
         if (a == b) {
-            scene_->addEllipse(a.x() - 25, a.y() - 55, 50, 50, QPen(QColor("#64748b"), 2));
+            auto* loop = scene_->addEllipse(a.x() - 25, a.y() - 55, 50, 50, QPen(QColor("#64748b"), 2));
+            loop->setData(2, pathText(edge.includer)); loop->setData(3, pathText(edge.included));
             continue;
         }
         const QPointF delta = b - a;
@@ -109,7 +110,8 @@ void GraphPlaceholder::recolor() {
             line->setPen(QPen(QColor(on ? t.accent : t.edge), on ? 3 : 2));
             line->setZValue(on ? 0.5 : 0); // Above other edges, still under the boxes.
         } else if (auto* loop = qgraphicsitem_cast<QGraphicsEllipseItem*>(item)) {
-            loop->setPen(QPen(QColor(t.edge), 2));
+            const bool on = chain_.contains({loop->data(2).toString(), loop->data(3).toString()});
+            loop->setPen(QPen(QColor(on ? t.accent : t.edge), on ? 3 : 2));
         } else if (auto* arrow = qgraphicsitem_cast<QGraphicsPolygonItem*>(item)) {
             const bool on = chain_.contains({arrow->data(2).toString(), arrow->data(3).toString()});
             arrow->setBrush(QColor(on ? t.accent : t.edge));

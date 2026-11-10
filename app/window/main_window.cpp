@@ -147,8 +147,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     diagnostics_->header()->setSectionResizeMode(1, QHeaderView::Stretch);
     diagnostics_->setColumnWidth(0, 110); diagnostics_->setColumnWidth(2, 260);
     diagnostics_->setRootIsDecorated(false);
+    cycles_ = new QTreeWidget;
+    cycles_->setObjectName(QStringLiteral("cyclesTree"));
+    cycles_->setHeaderLabels({tr("Группа / файл"), tr("Замкнутая цепочка")});
+    cycles_->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+    cycles_->setColumnWidth(0, 200);
+    cycles_->setAccessibleName(tr("Циклические группы"));
+    auto* bottom = new QSplitter(Qt::Horizontal);
+    bottom->addWidget(panel(tr("ДИАГНОСТИКА АНАЛИЗА"), diagnostics_));
+    bottom->addWidget(panel(tr("ЦИКЛЫ · алгоритм Тарьяна"), cycles_));
+    bottom->setSizes({700, 500}); bottom->setChildrenCollapsible(false);
     auto* vertical = new QSplitter(Qt::Vertical);
-    vertical->addWidget(horizontal); vertical->addWidget(panel(tr("ДИАГНОСТИКА АНАЛИЗА"), diagnostics_));
+    vertical->addWidget(horizontal); vertical->addWidget(bottom);
     vertical->setSizes({490, 160}); vertical->setStretchFactor(0, 1);
     layout->addWidget(vertical, 1); setCentralWidget(central);
     progress_ = new QProgressBar;
@@ -166,12 +176,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(fit, &QPushButton::clicked, graph_, &GraphPlaceholder::fitGraph);
     connect(graph_, &GraphPlaceholder::fileActivated, this, &MainWindow::selectPath);
     connect(dependencies_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) { showChain(item); });
-    connect(dependencies_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* item) {
+    connect(cycles_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) { showCycle(item); });
+    const auto activate = [this](QTreeWidgetItem* item) {
         if (item->data(0, Qt::UserRole).isValid()) selectPath(item->data(0, Qt::UserRole).toString());
-    });
-    connect(diagnostics_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* item) {
-        if (item->data(0, Qt::UserRole).isValid()) selectPath(item->data(0, Qt::UserRole).toString());
-    });
+    };
+    for (auto* tree : {dependencies_, diagnostics_, cycles_}) connect(tree, &QTreeWidget::itemActivated, this, activate);
 }
 MainWindow::~MainWindow() = default;
 
@@ -195,7 +204,7 @@ void MainWindow::runAnalysis() {
     const QString input = project_->text().trimmed();
     setBusy(true);
     // Clear the old view so a failed scan cannot leave a stale graph on screen.
-    result_ = {}; dependencyGraph_.reset(); files_->clear(); dependencies_->clear(); diagnostics_->clear();
+    result_ = {}; dependencyGraph_.reset(); files_->clear(); dependencies_->clear(); diagnostics_->clear(); cycles_->clear();
     selected_->setText(tr("Выберите файл")); graph_->setResult(result_);
     summary_->setText(tr("Анализ проекта…"));
     statusBar()->showMessage(tr("Анализ выполняется в фоне"));
@@ -247,13 +256,15 @@ void MainWindow::showResult(headerscope::ScanResult result) {
         : pathText(result_.files.empty() ? std::filesystem::path{} : result_.files.front().parent_path());
     populateFileTree(files_, result_.files, root);
     graph_->setResult(result_);
+    const std::size_t cycleCount = showCycles();
     filterFiles(search_->text());
     if (!files_->currentItem())
         for (QTreeWidgetItemIterator it(files_); *it; ++it)
             if ((*it)->data(0, Qt::UserRole).isValid()) { files_->setCurrentItem(*it); break; }
     const QString status = result_.status == headerscope::ScanStatus::partial ? tr("Частичный анализ") : tr("Анализ завершён");
-    summary_->setText(tr("%1 · %2 файлов · %3 директив #include · %4 сообщений")
-        .arg(status).arg(result_.files.size()).arg(result_.edges.size()).arg(result_.diagnostics.size()));
+    summary_->setText(tr("%1 · %2 файлов · %3 директив #include · %4 циклических групп · %5 сообщений")
+        .arg(status).arg(result_.files.size()).arg(result_.edges.size())
+        .arg(cycleCount).arg(result_.diagnostics.size()));
     statusBar()->showMessage(status); emit analysisFinished();
 }
 void MainWindow::filterFiles(const QString& text) {
@@ -316,5 +327,33 @@ void MainWindow::showChain(QTreeWidgetItem* dependent) {
             }
         }
     }
+    graph_->highlightChain(std::move(chain));
+}
+// Lists Tarjan's strongly connected groups; each group keeps one closed example chain for highlighting.
+std::size_t MainWindow::showCycles() {
+    cycles_->clear();
+    const auto groups = dependencyGraph_->cycles();
+    for (std::size_t i = 0; i < groups.size(); ++i) {
+        QStringList names, paths;
+        for (const auto& step : groups[i].example) { names << pathText(step.filename()); paths << pathText(step); }
+        auto* group = new QTreeWidgetItem(cycles_, {tr("Группа %1 · %2 файлов").arg(i + 1).arg(groups[i].members.size()),
+                                                    names.join(QStringLiteral(" → "))});
+        group->setData(0, Qt::UserRole + 1, paths);
+        group->setToolTip(1, paths.join(QStringLiteral(" → ")));
+        for (const auto& member : groups[i].members) {
+            auto* item = new QTreeWidgetItem(group, {pathText(member.filename())});
+            item->setData(0, Qt::UserRole, pathText(member)); item->setToolTip(0, pathText(member));
+        }
+    }
+    if (groups.empty()) new QTreeWidgetItem(cycles_, {tr("Циклов не найдено")});
+    cycles_->expandAll();
+    return groups.size();
+}
+// Highlights the example closed chain of the group that `item` belongs to.
+void MainWindow::showCycle(QTreeWidgetItem* item) {
+    std::set<std::pair<QString, QString>> chain;
+    if (item && item->parent()) item = item->parent();
+    const QStringList paths = item ? item->data(0, Qt::UserRole + 1).toStringList() : QStringList();
+    for (qsizetype i = 0; i + 1 < paths.size(); ++i) chain.emplace(paths[i], paths[i + 1]);
     graph_->highlightChain(std::move(chain));
 }
