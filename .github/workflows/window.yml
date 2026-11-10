@@ -1,0 +1,29 @@
+name: Qt main window
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  window:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        scanner: ['OFF', 'ON']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          cache: true
+      - name: Install Clang
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev ninja-build llvm-18-dev libclang-18-dev clang-18
+      - name: Configure
+        run: >-
+          cmake -S . -B build-window -G Ninja
+          -DHEADERSCOPE_BUILD_SCANNER=${{ matrix.scanner }}
+          -DCMAKE_BUILD_TYPE=Debug
+          -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+          -DClang_DIR=/usr/lib/llvm-18/lib/cmake/clang
+      - name: Build
+        run: cmake --build build-window --parallel 2
+      - name: Test
+        run: ctest --test-dir build-window --output-on-failure
