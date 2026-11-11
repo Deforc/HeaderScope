@@ -52,6 +52,13 @@ const QGraphicsLineItem* edgeLine(const MainWindow& window, const QString& from,
     }
     return nullptr;
 }
+const QGraphicsLineItem* proposedIncludeLine(const MainWindow& window) {
+    for (auto* item : window.findChild<GraphPlaceholder*>()->scene()->items()) {
+        if (const auto* line = qgraphicsitem_cast<QGraphicsLineItem*>(item); line && line->pen().style() == Qt::DashLine)
+            return line;
+    }
+    return nullptr;
+}
 QColor markerColor(const QTreeWidgetItem* cycle) {
     return cycle->icon(0).pixmap(12, 12).toImage().pixelColor(6, 6);
 }
@@ -419,12 +426,6 @@ private slots:
         const auto pick = [](QComboBox* combo, const QString& name) {
             combo->setCurrentIndex(combo->findText(name));
         };
-        const auto proposed = [&] {
-            for (auto* item : window.findChild<GraphPlaceholder*>()->scene()->items())
-                if (auto* line = qgraphicsitem_cast<QGraphicsLineItem*>(item); line && line->pen().style() == Qt::DashLine)
-                    return line;
-            return static_cast<QGraphicsLineItem*>(nullptr);
-        };
         pick(includer, "b.h"); pick(header, "main.cpp");
         QCOMPARE(answer->text().section(QLatin1Char('\n'), 0, 0),
                  QStringLiteral("Цикл замкнётся: b.h → main.cpp → a.h → b.h"));
@@ -433,16 +434,68 @@ private slots:
         QVERIFY(ma && ab);
         QCOMPARE(ma->pen().width(), 3);
         QCOMPARE(ab->pen().width(), 3);
-        QVERIFY(proposed());
-        QCOMPARE(proposed()->pen().color(), QColor("#ef4444"));
+        QVERIFY(proposedIncludeLine(window));
+        QCOMPARE(proposedIncludeLine(window)->pen().color(), QColor("#ef4444"));
+
+        auto* selector = window.findChild<QComboBox*>("languageSelector");
+        selector->setCurrentIndex(1);
+        QCOMPARE(answer->text(), QStringLiteral("This include would create a cycle: b.h → main.cpp → a.h → b.h\n"
+                                                "main.cpp already includes b.h indirectly."));
+        QCOMPARE(includer->currentText(), QStringLiteral("b.h"));
+        QCOMPARE(header->currentText(), QStringLiteral("main.cpp"));
+        QCOMPARE(header->placeholderText(), QStringLiteral("Select a header"));
+        QVERIFY(proposedIncludeLine(window));
+        QVERIFY(proposedIncludeLine(window)->toolTip().startsWith(QStringLiteral("Proposed include:")));
+        selector->setCurrentIndex(0);
+        QVERIFY(answer->text().startsWith(QStringLiteral("Цикл замкнётся")));
 
         pick(includer, "main.cpp"); pick(header, "b.h");
         QVERIFY(answer->text().startsWith(QStringLiteral("Цикл не возникнет")));
         QCOMPARE(ab->pen().width(), 2);
-        QCOMPARE(proposed()->pen().color(), QColor("#16a34a"));
+        QVERIFY(proposedIncludeLine(window));
+        QCOMPARE(proposedIncludeLine(window)->pen().color(), QColor("#16a34a"));
 
         window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(0);
-        QVERIFY(!proposed()); // The suggestion is drawn only on its own tab.
+        QVERIFY(!proposedIncludeLine(window)); // The suggestion is drawn only on its own tab.
+    }
+    void proposedIncludeRecognizesExistingEdge() {
+        MainWindow window;
+        auto result = chain();
+        const auto root = result.files.front().parent_path();
+        result.edges.push_back({root / "b.h", root / "a.h", 4});
+        window.showResult(result);
+        window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(2);
+        auto* includer = window.findChild<QComboBox*>("checkIncluder");
+        auto* header = window.findChild<QComboBox*>("checkHeader");
+        includer->setCurrentIndex(includer->findText("b.h"));
+        header->setCurrentIndex(header->findText("main.cpp"));
+        QVERIFY(proposedIncludeLine(window));
+
+        includer->setCurrentIndex(includer->findText("a.h"));
+        header->setCurrentIndex(header->findText("b.h"));
+        QCOMPARE(window.findChild<QLabel*>("checkResult")->text(), QStringLiteral("Подключение уже существует."));
+        QVERIFY(!proposedIncludeLine(window));
+    }
+    void proposedIncludeUsesAvailablePartialGraph() {
+        MainWindow window;
+        auto result = chain();
+        result.status = headerscope::ScanStatus::partial;
+        window.showResult(result);
+        window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(2);
+        auto* includer = window.findChild<QComboBox*>("checkIncluder");
+        auto* header = window.findChild<QComboBox*>("checkHeader");
+        auto* answer = window.findChild<QLabel*>("checkResult");
+
+        includer->setCurrentIndex(includer->findText("b.h"));
+        header->setCurrentIndex(header->findText("main.cpp"));
+        QVERIFY(answer->text().startsWith(QStringLiteral("Цикл замкнётся")));
+        QVERIFY(proposedIncludeLine(window));
+        QCOMPARE(proposedIncludeLine(window)->pen().color(), QColor("#ef4444"));
+
+        includer->setCurrentIndex(includer->findText("main.cpp"));
+        header->setCurrentIndex(header->findText("b.h"));
+        QCOMPARE(answer->text(), QStringLiteral("В доступных данных цикл не найден. Анализ завершился частично."));
+        QVERIFY(!proposedIncludeLine(window));
     }
     void themeToggleSwitchesScheme() {
 #if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)

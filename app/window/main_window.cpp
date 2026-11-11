@@ -333,21 +333,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     allCycles_->setEnabled(false);
     includer_ = new QComboBox;
     includer_->setObjectName(QStringLiteral("checkIncluder"));
-    includer_->setPlaceholderText(tr("Выберите файл"));
-    includer_->setAccessibleName(tr("Файл, в который добавляется #include"));
     header_ = new QComboBox;
     header_->setObjectName(QStringLiteral("checkHeader"));
-    header_->setPlaceholderText(tr("Выберите заголовок"));
-    header_->setAccessibleName(tr("Подключаемый заголовок"));
     checkResult_ = new QLabel;
     checkResult_->setObjectName(QStringLiteral("checkResult"));
     checkResult_->setWordWrap(true); checkResult_->setTextFormat(Qt::PlainText);
     auto* check = new QWidget;
     auto* checkLayout = new QVBoxLayout(check);
     checkLayout->setContentsMargins(0, 0, 0, 0);
-    checkLayout->addWidget(new QLabel(tr("Файл")));
+    auto* includerLabel = new QLabel;
+    includerLabel->setProperty("translationSource", QStringLiteral("Файл"));
+    checkLayout->addWidget(includerLabel);
     checkLayout->addWidget(includer_);
-    checkLayout->addWidget(new QLabel(tr("Добавить #include заголовка")));
+    auto* headerLabel = new QLabel;
+    headerLabel->setProperty("translationSource", QStringLiteral("Добавить #include заголовка"));
+    checkLayout->addWidget(headerLabel);
     checkLayout->addWidget(header_);
     checkLayout->addSpacing(8);
     checkLayout->addWidget(checkResult_);
@@ -620,29 +620,49 @@ void MainWindow::checkInclude() {
     const auto from = includer_->currentData().toString();
     const auto to = header_->currentData().toString();
     std::set<std::pair<QString, QString>> chain;
-    std::optional<headerscope::FileChain> path;
+    QString message;
+    QString style;
+    bool showProposal = false;
+    bool closesCycle = false;
     if (from.isEmpty() || to.isEmpty() || !dependencyGraph_) {
-        checkResult_->setText(tr("Выберите файл и заголовок, чтобы узнать, замкнётся ли цикл."));
-        checkResult_->setStyleSheet({});
-    } else if ((path = dependencyGraph_->shortestPath(nativePath(to), nativePath(from)))) {
-        QStringList names{pathText(nativePath(from).filename())};
-        for (std::size_t i = 0; i < path->size(); ++i) {
-            names << pathText((*path)[i].filename());
-            if (i + 1 < path->size()) chain.emplace(pathText((*path)[i]), pathText((*path)[i + 1]));
-        }
-        checkResult_->setText(tr("Цикл замкнётся: %1\nПричина: %2 уже подключает %3%4.")
-            .arg(names.join(QStringLiteral(" → ")), names[1], names[0],
-                 path->size() > 2 ? tr(" косвенно") : QString()));
-        if (from == to) checkResult_->setText(tr("Цикл замкнётся: файл подключит сам себя."));
-        checkResult_->setStyleSheet(QStringLiteral("color: #ef4444;"));
+        message = tr("Выберите файл и заголовок, чтобы узнать, замкнётся ли цикл.");
     } else {
-        checkResult_->setText(tr("Цикл не возникнет: %1 не подключает %2 ни прямо, ни косвенно.")
-            .arg(pathText(nativePath(to).filename()), pathText(nativePath(from).filename())));
-        checkResult_->setStyleSheet(QStringLiteral("color: #16a34a;"));
+        const auto includer = nativePath(from);
+        const auto header = nativePath(to);
+        const auto directIncludes = dependencyGraph_->includes(includer);
+        if (std::ranges::find(directIncludes, header) != directIncludes.end()) {
+            message = tr("Подключение уже существует.");
+        } else if (const auto path = dependencyGraph_->shortestPath(header, includer)) {
+            if (includer == header) {
+                message = tr("Цикл замкнётся: файл подключит сам себя.");
+            } else {
+                QStringList names{pathText(includer.filename())};
+                for (std::size_t i = 0; i < path->size(); ++i) {
+                    names << pathText((*path)[i].filename());
+                    if (i + 1 < path->size()) chain.emplace(pathText((*path)[i]), pathText((*path)[i + 1]));
+                }
+                message = tr("Цикл замкнётся: %1\nПричина: %2 уже подключает %3%4.")
+                    .arg(names.join(QStringLiteral(" → ")), names[1], names[0],
+                         path->size() > 2 ? tr(" косвенно") : QString());
+            }
+            style = QStringLiteral("color: #ef4444;");
+            showProposal = true;
+            closesCycle = true;
+        } else if (result_.status == headerscope::ScanStatus::partial) {
+            message = tr("В доступных данных цикл не найден. Анализ завершился частично.");
+        } else {
+            message = tr("Цикл не возникнет: %1 не подключает %2 ни прямо, ни косвенно.")
+                .arg(pathText(header.filename()), pathText(includer.filename()));
+            style = QStringLiteral("color: #16a34a;");
+            showProposal = true;
+        }
     }
+    checkResult_->setText(message);
+    checkResult_->setStyleSheet(style);
     if (tabs_->currentIndex() != 2) return;
     graph_->highlightChain(std::move(chain));
-    graph_->showProposedInclude(from, to, path.has_value());
+    if (showProposal) graph_->showProposedInclude(from, to, closesCycle);
+    else graph_->showProposedInclude({}, {}, false);
 }
 // Highlights every edge lying on some include path from the clicked dependent to the selected file.
 void MainWindow::showChain(QTreeWidgetItem* dependent) {
@@ -754,6 +774,10 @@ void MainWindow::retranslateUi() {
     tabs_->setTabText(0, tr("Граф"));
     tabs_->setTabText(1, dependencyGraph_ ? tr("Циклы (%1)").arg(cycleCount_) : tr("Циклы"));
     tabs_->setTabText(2, tr("Проверка #include"));
+    includer_->setPlaceholderText(tr("Выберите файл"));
+    includer_->setAccessibleName(tr("Файл, в который добавляется #include"));
+    header_->setPlaceholderText(tr("Выберите заголовок"));
+    header_->setAccessibleName(tr("Подключаемый заголовок"));
     dependencies_->setAccessibleName(tr("Подключения и зависимые файлы"));
     cycles_->setAccessibleName(tr("Циклические группы"));
     allCycles_->setText(tr("Показать все циклы"));
@@ -772,5 +796,6 @@ void MainWindow::retranslateUi() {
         row->setText(1, language::diagnosticText(row->data(1, Qt::UserRole + 42).toString()));
         row->setToolTip(1, row->text(1));
     }
+    checkInclude();
     updateSummary();
 }
