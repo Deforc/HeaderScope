@@ -59,7 +59,9 @@ jobs:
         with:
           msystem: CLANG64
           update: true
-          pacboy: clang:p llvm:p lld:p cmake:p ninja:p python:p qt6-base:p
+          pacboy: >-
+            clang:p clang-tools-extra:p llvm:p lld:p
+            cmake:p ninja:p python:p qt6-base:p
       - name: Configure, build and test
         run: |
           set -euo pipefail
