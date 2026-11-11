@@ -2,6 +2,7 @@
 #include "graph_placeholder.hpp"
 #include "path_utils.hpp"
 #include <headerscope/demo/fixture.hpp>
+#include <QAbstractButton>
 #include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -18,6 +19,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QStyleHints>
 #include <QStackedWidget>
 #include <QTabBar>
 #include <QTemporaryDir>
@@ -349,6 +351,23 @@ private slots:
 
         window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(0);
         QVERIFY(!proposed()); // The suggestion is drawn only on its own tab.
+    }
+    void themeToggleSwitchesScheme() {
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+        QSKIP("Overriding the colour scheme needs Qt 6.8");
+#else
+        MainWindow window;
+        auto* toggle = window.findChild<QAbstractButton*>("themeToggle");
+        QVERIFY(toggle);
+        auto* hints = QGuiApplication::styleHints();
+        const auto before = hints->colorScheme();
+        toggle->click();
+        if (hints->colorScheme() == before) QSKIP("Platform ignores colour scheme requests");
+        const bool dark = hints->colorScheme() == Qt::ColorScheme::Dark;
+        QCOMPARE(toggle->isChecked(), dark);
+        QVERIFY(window.styleSheet().contains(QLatin1String(dark ? "#0f172a" : "#f1f5f9")));
+        hints->unsetColorScheme();
+#endif
     }
     void acyclicHasNoCycleGroups() {
         MainWindow window;

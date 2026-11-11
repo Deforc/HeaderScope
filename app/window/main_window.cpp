@@ -7,6 +7,7 @@
 #include <headerscope/scanner.hpp>
 #endif
 #include <QtConcurrent/QtConcurrentRun>
+#include <QAbstractButton>
 #include <QComboBox>
 #include <QDir>
 #include <QFileDialog>
@@ -32,6 +33,7 @@
 #include <QTextLayout>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
+#include <QVariantAnimation>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
@@ -98,6 +100,46 @@ private:
     }
 
     const QTreeWidget* tree_;
+};
+
+// iPhone-style on/off switch: a pill track with a knob that slides to the checked side.
+class ThemeSwitch final : public QAbstractButton {
+public:
+    ThemeSwitch() {
+        setCheckable(true);
+        setCursor(Qt::PointingHandCursor);
+        setFixedSize(sizeHint());
+        slide_.setDuration(150);
+        slide_.setEasingCurve(QEasingCurve::OutCubic);
+        connect(&slide_, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
+            knob_ = value.toReal(); update();
+        });
+        connect(this, &QAbstractButton::toggled, this, [this](bool on) {
+            slide_.stop();
+            if (!isVisible()) { knob_ = on; update(); return; }
+            slide_.setStartValue(knob_); slide_.setEndValue(on ? 1.0 : 0.0); slide_.start();
+        });
+    }
+    QSize sizeHint() const override { return {44, 24}; }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        const Theme& t = theme();
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QRectF track = QRectF(rect()).adjusted(1, 1, -1, -1);
+        painter.setPen(hasFocus() ? QPen(QColor(t.hover), 2) : Qt::NoPen);
+        painter.setBrush(QColor(isChecked() ? t.accent : t.edge));
+        painter.drawRoundedRect(track, track.height() / 2, track.height() / 2);
+        const qreal size = track.height() - 4;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(Qt::white);
+        painter.drawEllipse(QRectF(track.x() + 2 + knob_ * (track.width() - size - 4), track.y() + 2, size, size));
+    }
+
+private:
+    QVariantAnimation slide_;
+    qreal knob_ = 0;
 };
 
 QColor cycleColor(std::size_t index) {
@@ -203,6 +245,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     export_->setEnabled(false);
     auto* fit = new QPushButton(tr("Уместить граф"));
     actions->addWidget(analyze_); actions->addWidget(export_); actions->addStretch(); actions->addWidget(fit);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+    // Overriding the scheme re-emits colorSchemeChanged, which already restyles the window and graph.
+    auto* themeToggle = new ThemeSwitch;
+    themeToggle->setObjectName(QStringLiteral("themeToggle"));
+    themeToggle->setAccessibleName(tr("Тёмная тема"));
+    auto* hints = QGuiApplication::styleHints();
+    const auto sync = [themeToggle, hints] { themeToggle->setChecked(hints->colorScheme() == Qt::ColorScheme::Dark); };
+    sync();
+    connect(hints, &QStyleHints::colorSchemeChanged, themeToggle, sync);
+    // clicked, not toggled: following a system change must not pin an override.
+    connect(themeToggle, &QAbstractButton::clicked, this, [hints](bool dark) {
+        hints->setColorScheme(dark ? Qt::ColorScheme::Dark : Qt::ColorScheme::Light);
+    });
+    actions->addSpacing(12);
+    actions->addWidget(new QLabel(tr("Тёмная тема")));
+    actions->addWidget(themeToggle);
+#endif
     layout->addLayout(actions);
     summary_ = new QLabel(tr("Выберите папку проекта и нажмите «Анализировать»."));
     summary_->setObjectName(QStringLiteral("analysisSummary"));
