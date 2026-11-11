@@ -1,0 +1,15 @@
+if(NOT DEFINED INSPECT OR NOT DEFINED TEST_DIR)
+    message(FATAL_ERROR "Missing test paths")
+endif()
+file(MAKE_DIRECTORY "${TEST_DIR}")
+set(output "${TEST_DIR}/graph.json")
+execute_process(COMMAND "${INSPECT}" unused.json --export json "${output}" --save "${TEST_DIR}/./graph.json"
+    RESULT_VARIABLE result ERROR_VARIABLE error)
+if(NOT result EQUAL 2 OR NOT error MATCHES "different files")
+    message(FATAL_ERROR "Same output must be rejected: ${result}: ${error}")
+endif()
+execute_process(COMMAND "${INSPECT}" unused.json --export json "${output}" --export mermaid "${TEST_DIR}/other.mmd"
+    RESULT_VARIABLE result ERROR_VARIABLE error)
+if(NOT result EQUAL 2 OR NOT error MATCHES "only be specified once")
+    message(FATAL_ERROR "Repeated export must be rejected: ${result}: ${error}")
+endif()

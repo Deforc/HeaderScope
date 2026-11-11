@@ -3,6 +3,7 @@
 #include <headerscope/graph.hpp>
 #include <QFutureWatcher>
 #include <QMainWindow>
+#include <QString>
 #include <filesystem>
 #include <memory>
 #include <vector>
@@ -43,6 +44,7 @@ private:
     };
     static AnalysisResult prepareAnalysis(headerscope::ScanResult scan);
     void showAnalysis(AnalysisResult analysis);
+    void exportGraph();
     void chooseProject();
     void chooseDatabase();
     void finishAnalysis();
@@ -58,6 +60,7 @@ private:
     QPushButton* browse_;
     QPushButton* database_;
     QPushButton* analyze_;
+    QPushButton* export_;
     QPushButton* allCycles_;
     QTreeWidget* files_;
     QTreeWidget* dependencies_;
@@ -72,6 +75,8 @@ private:
     QStackedWidget* details_;
     QProgressBar* progress_;
     QFutureWatcher<AnalysisResult> watcher_;
+    QString scanInput_;
+    std::filesystem::path displayedRoot_;
     headerscope::ScanResult result_;
     std::shared_ptr<const headerscope::DependencyGraph> dependencyGraph_;
 };

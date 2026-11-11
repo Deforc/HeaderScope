@@ -1,4 +1,10 @@
-add_library(headerscope_graph STATIC graph.cpp reports.cpp)
+add_library(headerscope_graph STATIC graph.cpp reports.cpp export.cpp)
 add_library(HeaderScope::graph ALIAS headerscope_graph)
 target_include_directories(headerscope_graph PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(headerscope_graph PUBLIC HeaderScope::contract)
+
+if(BUILD_TESTING)
+    add_executable(headerscope_export_tests tests/export_tests.cpp)
+    target_link_libraries(headerscope_export_tests PRIVATE HeaderScope::graph)
+    add_test(NAME graph_export COMMAND headerscope_export_tests)
+endif()

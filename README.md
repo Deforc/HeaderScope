@@ -91,3 +91,30 @@ build-inspect/demo/inspect/headerscope_inspect build-demo/compile_commands.json 
 Код выхода: `0` — успешный анализ, `1` — ошибка/неполный анализ, `2` — неверные аргументы.
 
 Границы модулей, формат результата и сценарии для проверки описаны в [архитектуре и плане старта](docs/architecture.md).
+
+## Экспорт графа
+
+Кнопка «Экспорт графа…» сохраняет показанный результат в JSON или Mermaid (`.mmd`).
+Из корня репозитория выполните одну из команд.
+
+```sh
+build-inspect/demo/inspect/headerscope_inspect build-demo/compile_commands.json --root . --export json graph.json
+build-inspect/demo/inspect/headerscope_inspect build-demo/compile_commands.json --root . --export mermaid graph.mmd
+```
+
+Для демопроекта `main.cpp → a.h → b.h` экспорт Mermaid с корнем
+`demo/include-chain` описывает такой граф.
+
+```mermaid
+flowchart LR
+    n0["a.h"]
+    n1["b.h"]
+    n2["main.cpp"]
+    n0 --> n1
+    n2 --> n0
+```
+
+При одновременном использовании `--export` и `--save` укажите отдельный файл
+для каждого результата. Команда экспорта сохраняет связи из частичного анализа
+с отметкой `partial` и возвращает код 1. Для экспорта нужен полный или частичный
+результат с путями в UTF-8.

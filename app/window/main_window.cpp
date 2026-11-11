@@ -2,6 +2,7 @@
 #include "graph_placeholder.hpp"
 #include "path_utils.hpp"
 #include "theme.hpp"
+#include <headerscope/export.hpp>
 #if HEADERSCOPE_HAS_SCANNER
 #include <headerscope/scanner.hpp>
 #endif
@@ -15,10 +16,12 @@
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSaveFile>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
@@ -33,6 +36,7 @@
 #include <exception>
 #include <iterator>
 #include <set>
+#include <stdexcept>
 
 namespace {
 enum CycleRowRole { CycleFiles = Qt::UserRole, CycleColor };
@@ -187,8 +191,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     analyze_ = new QPushButton(tr("Анализировать"));
     analyze_->setObjectName(QStringLiteral("analyzeButton"));
     analyze_->setDefault(true);
+    export_ = new QPushButton(tr("Экспорт графа…"));
+    export_->setObjectName(QStringLiteral("exportButton"));
+    export_->setEnabled(false);
     auto* fit = new QPushButton(tr("Уместить граф"));
-    actions->addWidget(analyze_); actions->addStretch(); actions->addWidget(fit);
+    actions->addWidget(analyze_); actions->addWidget(export_); actions->addStretch(); actions->addWidget(fit);
     layout->addLayout(actions);
     summary_ = new QLabel(tr("Выберите папку проекта и нажмите «Анализировать»."));
     summary_->setObjectName(QStringLiteral("analysisSummary"));
@@ -274,6 +281,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(browse_, &QPushButton::clicked, this, &MainWindow::chooseProject);
     connect(database_, &QPushButton::clicked, this, &MainWindow::chooseDatabase);
     connect(analyze_, &QPushButton::clicked, this, &MainWindow::runAnalysis);
+    connect(export_, &QPushButton::clicked, this, &MainWindow::exportGraph);
     connect(project_, &QLineEdit::returnPressed, this, &MainWindow::runAnalysis);
     connect(&watcher_, &QFutureWatcher<AnalysisResult>::finished, this, &MainWindow::finishAnalysis);
     connect(files_, &QTreeWidget::currentItemChanged, this, &MainWindow::updateSelection);
@@ -298,6 +306,33 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 }
 MainWindow::~MainWindow() = default;
 
+void MainWindow::exportGraph() {
+    const auto jsonFilter = tr("JSON (*.json)");
+    const auto mermaidFilter = tr("Mermaid (*.mmd)");
+    QFileDialog dialog(this, tr("Экспорт графа"));
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+    dialog.setNameFilters({jsonFilter, mermaidFilter});
+    dialog.setDefaultSuffix(QStringLiteral("json"));
+    connect(&dialog, &QFileDialog::filterSelected, &dialog, [&dialog, mermaidFilter](const QString& filter) {
+        dialog.setDefaultSuffix(filter == mermaidFilter ? QStringLiteral("mmd") : QStringLiteral("json"));
+    });
+    if (dialog.exec() != QDialog::Accepted) return;
+    const auto filename = dialog.selectedFiles().value(0);
+    if (filename.isEmpty()) return;
+    try {
+        const auto text = dialog.selectedNameFilter() == mermaidFilter
+            ? headerscope::exportGraphMermaid(result_, displayedRoot_)
+            : headerscope::exportGraphJson(result_, displayedRoot_);
+        QSaveFile output(filename);
+        const auto size = static_cast<qint64>(text.size());
+        if (!output.open(QIODevice::WriteOnly) || output.write(text.data(), size) != size || !output.commit())
+            throw std::runtime_error(output.errorString().toStdString());
+        statusBar()->showMessage(tr("Граф экспортирован: %1").arg(filename));
+    } catch (const std::exception& error) {
+        statusBar()->showMessage(tr("Ошибка экспорта графа"));
+        QMessageBox::warning(this, tr("Ошибка экспорта"), QString::fromUtf8(error.what()));
+    }
+}
 void MainWindow::chooseProject() {
     const auto path = QFileDialog::getExistingDirectory(this, tr("Выберите папку проекта"), project_->text());
     if (!path.isEmpty()) { project_->setText(path); runAnalysis(); }
@@ -308,6 +343,7 @@ void MainWindow::chooseDatabase() {
     if (!path.isEmpty()) { project_->setText(path); runAnalysis(); }
 }
 void MainWindow::setBusy(bool busy) {
+    export_->setEnabled(!busy && result_.status != headerscope::ScanStatus::failed);
     project_->setEnabled(!busy); browse_->setEnabled(!busy);
     database_->setEnabled(!busy); analyze_->setEnabled(!busy);
     progress_->setRange(0, busy ? 0 : 1); progress_->setVisible(busy);
@@ -316,6 +352,7 @@ void MainWindow::setBusy(bool busy) {
 void MainWindow::runAnalysis() {
     if (!analyze_->isEnabled()) return;
     const QString input = project_->text().trimmed();
+    scanInput_ = input;
     setBusy(true);
     // Clear the old view so a failed scan cannot leave a stale graph on screen.
     result_ = {}; dependencyGraph_.reset(); files_->clear(); dependencies_->clear(); diagnostics_->clear(); cycles_->clear();
@@ -348,6 +385,7 @@ void MainWindow::finishAnalysis() {
     showAnalysis(watcher_.future().takeResult());
 }
 void MainWindow::showResult(headerscope::ScanResult result) {
+    scanInput_ = project_->text().trimmed();
     showAnalysis(prepareAnalysis(std::move(result)));
 }
 MainWindow::AnalysisResult MainWindow::prepareAnalysis(headerscope::ScanResult scan) {
@@ -376,14 +414,22 @@ void MainWindow::showAnalysis(AnalysisResult analysis) {
         row->setToolTip(1, row->text(1)); row->setToolTip(2, row->text(2));
     }
     if (result_.status == headerscope::ScanStatus::failed) {
+        export_->setEnabled(false);
         summary_->setText(tr("Анализ не выполнен. Подробности в диагностике."));
         statusBar()->showMessage(tr("Ошибка анализа")); emit analysisFinished(); return;
     }
     dependencyGraph_ = std::move(analysis.graph);
-    const QFileInfo input(project_->text().trimmed());
-    const QString root = input.isDir() ? input.absoluteFilePath()
-        : input.isFile() ? input.absolutePath()
-        : pathText(result_.files.empty() ? std::filesystem::path{} : result_.files.front().parent_path());
+    const QFileInfo input(scanInput_);
+    QString root;
+    if (input.exists()) {
+        const auto canonicalPath = input.canonicalFilePath();
+        const QFileInfo resolved(canonicalPath.isEmpty() ? input.absoluteFilePath() : canonicalPath);
+        root = resolved.isDir() ? resolved.absoluteFilePath() : resolved.absolutePath();
+    } else if (!result_.files.empty()) {
+        root = pathText(result_.files.front().parent_path());
+    }
+    displayedRoot_ = nativePath(root);
+    export_->setEnabled(true);
     populateFileTree(files_, result_.files, root);
     graph_->setResult(result_);
     showCycles(analysis.groups);
