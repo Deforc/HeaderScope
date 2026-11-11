@@ -18,4 +18,9 @@ if(BUILD_TESTING)
         COMMAND Python3::Interpreter "${inspect_e2e_runner}" graphs
             "$<TARGET_FILE:headerscope_inspect>" "${CMAKE_CURRENT_BINARY_DIR}")
     set_tests_properties(inspect_e2e inspect_e2e.graphs PROPERTIES TIMEOUT 60)
+
+    add_test(NAME export_cli_arguments COMMAND ${CMAKE_COMMAND}
+        "-DINSPECT=$<TARGET_FILE:headerscope_inspect>"
+        "-DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/export-cli-test"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/export_cli_tests.cmake")
 endif()

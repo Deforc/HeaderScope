@@ -101,6 +101,19 @@ def check_workflow(inspect, work, project):
     )
     baseline_bytes = snapshot.read_bytes()
 
+    for input_path, output_path, options in (
+        (database, database, ()),
+        (database.parent, database, ()),
+        (database, snapshot, ("--compare", snapshot)),
+    ):
+        original = output_path.read_bytes()
+        rejected = run_inspect(
+            inspect, input_path, project, *options, "--export", "json", output_path, status=2,
+        )
+        expect_output(rejected.stderr, "Graph export must not overwrite an input file")
+        if output_path.read_bytes() != original:
+            raise RuntimeError(f"Export changed input file {output_path}")
+
     write_database(database, project, [{"sources": ["main.cpp"], "defines": ["HEADERSCOPE_DEMO_CYCLE"]}])
     comparison = run_inspect(inspect, database, project, "--compare", snapshot, "--rank")
     expect_output(

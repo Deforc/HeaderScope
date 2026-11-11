@@ -1,7 +1,11 @@
 #include "snapshot.hpp"
 
+#include <headerscope/export.hpp>
 #include <headerscope/reports.hpp>
 #include <headerscope/scanner.hpp>
+#include <llvm/Support/Error.h>
+#include <llvm/Support/FileSystem.h>
+#include <llvm/Support/raw_ostream.h>
 
 #include <iostream>
 #include <stdexcept>
@@ -14,14 +18,36 @@ struct Options {
     std::optional<fs::path> file, save, compare;
     fs::path root = fs::current_path();
     bool rank = false;
+    std::optional<std::string> exportFormat;
+    std::optional<fs::path> exportFile;
 };
+
+bool sameFile(const fs::path& first, const fs::path& second)
+{
+    std::error_code error;
+    return fs::equivalent(first, second, error) ||
+        fs::weakly_canonical(fs::absolute(first)) == fs::weakly_canonical(fs::absolute(second));
+}
+
+void requireDistinctOutputs(const fs::path& graph, const fs::path& snapshot)
+{
+    if (sameFile(graph, snapshot))
+        throw std::invalid_argument("Graph export and snapshot must use different files");
+}
 
 Options parseOptions(int argc, char** argv)
 {
     Options options;
     for (int i = 2; i < argc; ++i) {
         const std::string_view argument = argv[i];
-        if (argument == "--rank") {
+        if (argument == "--export") {
+            if (options.exportFormat) throw std::invalid_argument("--export may only be specified once");
+            if (i + 2 >= argc || std::string_view(argv[i + 1]).starts_with("--") || std::string_view(argv[i + 2]).starts_with("--"))
+                throw std::invalid_argument("--export requires a format and output file");
+            options.exportFormat = argv[++i]; options.exportFile = argv[++i];
+            if (*options.exportFormat != "json" && *options.exportFormat != "mermaid")
+                throw std::invalid_argument("Export format must be json or mermaid");
+        } else if (argument == "--rank") {
             options.rank = true;
         } else if (argument == "--save" || argument == "--compare" || argument == "--root") {
             if (++i == argc || std::string_view(argv[i]).starts_with("--"))
@@ -38,6 +64,17 @@ Options parseOptions(int argc, char** argv)
     if (!fs::is_directory(options.root))
         throw std::invalid_argument("Project root must be an existing directory");
     options.root = fs::canonical(options.root);
+    if (options.exportFile) {
+        const auto& output = *options.exportFile;
+        auto database = fs::path(argv[1]);
+        std::error_code error;
+        if (fs::is_directory(database, error))
+            database /= "compile_commands.json";
+        if (sameFile(output, database) || (options.compare && sameFile(output, *options.compare)))
+            throw std::invalid_argument("Graph export must not overwrite an input file");
+        if (options.save)
+            requireDistinctOutputs(output, *options.save);
+    }
     return options;
 }
 
@@ -87,7 +124,7 @@ void printDiff(const headerscope::DependencyDiff& diff, const headerscope::Depen
 
 constexpr const char* usage =
     "Usage: headerscope_inspect <compile_commands.json> [file] "
-    "[--save snapshot.json] [--compare snapshot.json] [--rank] [--root directory]\n";
+    "[--save snapshot.json] [--compare snapshot.json] [--rank] [--root directory] [--export <json|mermaid> output-file]\n";
 } // namespace
 
 int main(int argc, char** argv)
@@ -121,7 +158,7 @@ int main(int argc, char** argv)
                   << " scan: " << scan.files.size() << " files, " << scan.edges.size()
                   << " include directives\n";
         const headerscope::DependencyGraph graph(scan);
-        if (!options.rank && !baseline) {
+        if (!options.rank && !baseline && !options.exportFormat) {
             for (const auto& edge : scan.edges)
                 std::cout << display(edge.includer) << ':' << edge.line << " -> "
                           << display(edge.included) << '\n';
@@ -144,7 +181,32 @@ int main(int argc, char** argv)
             for (const auto& dependent : graph.dependents(file))
                 printChain(graph.shortestPath(dependent, file).value());
         }
+        if (options.exportFormat) {
+            const auto text = *options.exportFormat == "json"
+                ? headerscope::exportGraphJson(scan, options.root)
+                : headerscope::exportGraphMermaid(scan, options.root);
+            const auto outputPath = fs::absolute(*options.exportFile).u8string();
+            const std::string target(reinterpret_cast<const char*>(outputPath.data()), outputPath.size());
+            if (auto error = llvm::writeToOutput(target, [&](llvm::raw_ostream& output) -> llvm::Error {
+                    output << text;
+                    output.flush();
+                    // writeToOutput uses raw_fd_ostream for absolute paths, except /dev/null.
+                    if (target != "/dev/null") {
+                        auto& file = static_cast<llvm::raw_fd_ostream&>(output);
+                        if (file.has_error()) {
+                            const auto errorCode = file.error();
+                            file.clear_error();
+                            return llvm::errorCodeToError(errorCode);
+                        }
+                    }
+                    return llvm::Error::success();
+                }))
+                throw std::runtime_error("Cannot write graph export: " + llvm::toString(std::move(error)));
+            std::cout << "Exported graph: " << options.exportFile->string() << '\n';
+        }
         if (options.save) {
+            // Case-insensitive or Unicode-equivalent names can alias once the export exists.
+            if (options.exportFile) requireDistinctOutputs(*options.exportFile, *options.save);
             headerscope::saveSnapshot(scan, *options.save, options.root);
             std::cout << "Saved snapshot: " << options.save->string() << '\n';
         }
