@@ -11,8 +11,11 @@
 #include <headerscope/scanner.hpp>
 #endif
 #include <QtConcurrent/QtConcurrentRun>
+#include <QAbstractButton>
+#include <QComboBox>
 #include <QDir>
 #include <QFileDialog>
+#include <QFileIconProvider>
 #include <QFileInfo>
 #include <QHash>
 #include <QHeaderView>
@@ -34,6 +37,7 @@
 #include <QTextLayout>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
+#include <QVariantAnimation>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
@@ -102,6 +106,46 @@ private:
     const QTreeWidget* tree_;
 };
 
+// iPhone-style on/off switch: a pill track with a knob that slides to the checked side.
+class ThemeSwitch final : public QAbstractButton {
+public:
+    ThemeSwitch() {
+        setCheckable(true);
+        setCursor(Qt::PointingHandCursor);
+        setFixedSize(sizeHint());
+        slide_.setDuration(150);
+        slide_.setEasingCurve(QEasingCurve::OutCubic);
+        connect(&slide_, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
+            knob_ = value.toReal(); update();
+        });
+        connect(this, &QAbstractButton::toggled, this, [this](bool on) {
+            slide_.stop();
+            if (!isVisible()) { knob_ = on; update(); return; }
+            slide_.setStartValue(knob_); slide_.setEndValue(on ? 1.0 : 0.0); slide_.start();
+        });
+    }
+    QSize sizeHint() const override { return {44, 24}; }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        const Theme& t = theme();
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QRectF track = QRectF(rect()).adjusted(1, 1, -1, -1);
+        painter.setPen(hasFocus() ? QPen(QColor(t.hover), 2) : Qt::NoPen);
+        painter.setBrush(QColor(isChecked() ? t.accent : t.edge));
+        painter.drawRoundedRect(track, track.height() / 2, track.height() / 2);
+        const qreal size = track.height() - 4;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(Qt::white);
+        painter.drawEllipse(QRectF(track.x() + 2 + knob_ * (track.width() - size - 4), track.y() + 2, size, size));
+    }
+
+private:
+    QVariantAnimation slide_;
+    qreal knob_ = 0;
+};
+
 QColor cycleColor(std::size_t index) {
     static const QColor palette[] = {
         QColor("#3478e5"), QColor("#d9790d"), QColor("#a34bd9"),
@@ -144,6 +188,9 @@ QWidget* panel(const char* title, QWidget* content, QWidget* extra = nullptr) {
 
 void populateFileTree(QTreeWidget* tree, const std::vector<std::filesystem::path>& files, const QString& root) {
     QHash<QString, QTreeWidgetItem*> directories;
+    const QFileIconProvider icons;
+    const QIcon folderIcon = icons.icon(QAbstractFileIconProvider::Folder);
+    const QIcon fileIcon = icons.icon(QAbstractFileIconProvider::File);
     for (const auto& file : files) {
         const QStringList parts = relativeName(file, root).split(QLatin1Char('/'), Qt::SkipEmptyParts);
         QTreeWidgetItem* parent = nullptr;
@@ -154,6 +201,7 @@ void populateFileTree(QTreeWidget* tree, const std::vector<std::filesystem::path
             if (!directory) {
                 directory = parent ? new QTreeWidgetItem(parent, {parts[i]}) : new QTreeWidgetItem(tree, {parts[i]});
                 directory->setToolTip(0, key);
+                directory->setIcon(0, folderIcon);
             }
             parent = directory;
         }
@@ -161,6 +209,7 @@ void populateFileTree(QTreeWidget* tree, const std::vector<std::filesystem::path
         // Search matches the relative path, so typing a directory name finds the files inside it.
         auto* leaf = parent ? new QTreeWidgetItem(parent, {name}) : new QTreeWidgetItem(tree, {name});
         leaf->setData(0, Qt::UserRole, pathText(file)); leaf->setToolTip(0, pathText(file));
+        leaf->setIcon(0, fileIcon);
         leaf->setData(0, Qt::UserRole + 1, parts.join(QLatin1Char('/')));
     }
     tree->expandAll();
@@ -203,18 +252,31 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     analyze_ = new QPushButton(tr("Анализировать"));
     analyze_->setObjectName(QStringLiteral("analyzeButton"));
     analyze_->setDefault(true);
-
-   export_ = new QPushButton(tr("Экспорт графа…"));
-   export_->setObjectName(QStringLiteral("exportButton"));
-   export_->setEnabled(false);
-
-   fit_ = new QPushButton(tr("Уместить граф"));
-
-   actions->addWidget(analyze_);
-   actions->addWidget(export_);
-   actions->addStretch();
-   actions->addWidget(fit_); 
-
+    export_ = new QPushButton(tr("Экспорт графа…"));
+    export_->setObjectName(QStringLiteral("exportButton"));
+    export_->setEnabled(false);
+    fit_ = new QPushButton(tr("Уместить граф"));
+    actions->addWidget(analyze_); actions->addWidget(export_); actions->addStretch(); actions->addWidget(fit_);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+    // Overriding the scheme re-emits colorSchemeChanged, which already restyles the window and graph.
+    auto* themeToggle = new ThemeSwitch;
+    themeToggle->setObjectName(QStringLiteral("themeToggle"));
+    themeToggle->setAccessibleName(tr("Тёмная тема"));
+    auto* hints = QGuiApplication::styleHints();
+    const auto sync = [themeToggle, hints] { themeToggle->setChecked(hints->colorScheme() == Qt::ColorScheme::Dark); };
+    sync();
+    connect(hints, &QStyleHints::colorSchemeChanged, themeToggle, sync);
+    // clicked, not toggled: following a system change must not pin an override.
+    connect(themeToggle, &QAbstractButton::clicked, this, [hints](bool dark) {
+        hints->setColorScheme(dark ? Qt::ColorScheme::Dark : Qt::ColorScheme::Light);
+    });
+    actions->addSpacing(12);
+    auto* themeLabel = new QLabel(tr("Тёмная тема"));
+    themeLabel->setObjectName(QStringLiteral("themeLabel"));
+    themeLabel->setProperty("translationSource", QStringLiteral("Тёмная тема"));
+    actions->addWidget(themeLabel);
+    actions->addWidget(themeToggle);
+#endif
     layout->addLayout(actions);
     summary_ = new QLabel(tr("Выберите папку проекта и нажмите «Анализировать»."));
     summary_->setObjectName(QStringLiteral("analysisSummary"));
@@ -233,11 +295,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     tabs_ = new QTabBar;
     tabs_->setObjectName(QStringLiteral("viewTabs"));
     tabs_->setDrawBase(false); tabs_->setExpanding(false);
-    tabs_->addTab(tr("Граф")); tabs_->addTab(tr("Циклы"));
-    cycleBadge_ = new QLabel(QStringLiteral("0"));
-    cycleBadge_->setObjectName(QStringLiteral("tabBadge"));
-    cycleBadge_->setAlignment(Qt::AlignCenter); cycleBadge_->setMinimumSize(26, 20); // ponytail: fits 2 digits
-    tabs_->setTabButton(1, QTabBar::RightSide, cycleBadge_);
+    tabs_->addTab(tr("Граф")); tabs_->addTab(tr("Циклы")); tabs_->addTab(tr("Проверка #include"));
     auto* center = panel("A → B означает: A подключает B", graph_);
     static_cast<QVBoxLayout*>(center->layout())->insertWidget(0, tabs_, 0, Qt::AlignLeft);
     horizontal->addWidget(center);
@@ -273,11 +331,33 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     allCycles_ = new QPushButton(tr("Показать все циклы"));
     allCycles_->setObjectName(QStringLiteral("allCyclesButton"));
     allCycles_->setEnabled(false);
+    includer_ = new QComboBox;
+    includer_->setObjectName(QStringLiteral("checkIncluder"));
+    header_ = new QComboBox;
+    header_->setObjectName(QStringLiteral("checkHeader"));
+    checkResult_ = new QLabel;
+    checkResult_->setObjectName(QStringLiteral("checkResult"));
+    checkResult_->setWordWrap(true); checkResult_->setTextFormat(Qt::PlainText);
+    auto* check = new QWidget;
+    auto* checkLayout = new QVBoxLayout(check);
+    checkLayout->setContentsMargins(0, 0, 0, 0);
+    auto* includerLabel = new QLabel;
+    includerLabel->setProperty("translationSource", QStringLiteral("Файл"));
+    checkLayout->addWidget(includerLabel);
+    checkLayout->addWidget(includer_);
+    auto* headerLabel = new QLabel;
+    headerLabel->setProperty("translationSource", QStringLiteral("Добавить #include заголовка"));
+    checkLayout->addWidget(headerLabel);
+    checkLayout->addWidget(header_);
+    checkLayout->addSpacing(8);
+    checkLayout->addWidget(checkResult_);
+    checkLayout->addStretch();
     // The right column describes whatever the tab above the graph shows.
     details_ = new QStackedWidget;
     details_->setObjectName(QStringLiteral("details"));
     details_->addWidget(panel("ЗАВИСИМОСТИ", dependencies_, header));
     details_->addWidget(panel("ЦИКЛИЧЕСКИЕ ЗАВИСИМОСТИ", cycles_, allCycles_));
+    details_->addWidget(panel("ПРОВЕРКА НОВОГО #INCLUDE", check));
     horizontal->addWidget(details_);
     horizontal->setStretchFactor(0, 1); horizontal->setStretchFactor(1, 3); horizontal->setStretchFactor(2, 2);
     horizontal->setSizes({220, 580, 360}); horizontal->setChildrenCollapsible(false);
@@ -317,7 +397,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         details_->setCurrentIndex(index);
         if (index == 0) showChain(dependencies_->currentItem());
         graph_->showCycleHighlights(index == 1);
+        if (index == 2) checkInclude(); else graph_->showProposedInclude({}, {}, false);
     });
+    for (auto* combo : {includer_, header_})
+        connect(combo, &QComboBox::currentIndexChanged, this, &MainWindow::checkInclude);
     const auto activate = [this](QTreeWidgetItem* item) {
         if (item->data(0, Qt::UserRole).isValid()) selectPath(item->data(0, Qt::UserRole).toString());
     };
@@ -387,8 +470,9 @@ void MainWindow::runAnalysis() {
     hasResult_ = false; groupCount_ = 0;
     result_ = {}; dependencyGraph_.reset(); files_->clear(); dependencies_->clear(); diagnostics_->clear(); cycles_->clear();
     updateCycleFocus();
-    selected_->setText(tr("Выберите файл")); selectedPath_->clear(); cycleBadge_->setText(QStringLiteral("0"));
+    selected_->setText(tr("Выберите файл")); selectedPath_->clear(); tabs_->setTabText(1, tr("Циклы"));
     graph_->setResult(result_);
+    includer_->clear(); header_->clear(); checkInclude();
     summary_->setText(tr("Анализ проекта…"));
     statusBar()->showMessage(tr("Анализ выполняется в фоне"));
     watcher_.setFuture(QtConcurrent::run([input]() -> AnalysisResult {
@@ -468,6 +552,10 @@ void MainWindow::showAnalysis(AnalysisResult analysis) {
     populateFileTree(files_, result_.files, root);
     graph_->setResult(result_);
     showCycles(analysis.groups);
+    for (const auto& file : result_.files) {
+        for (auto* combo : {includer_, header_}) combo->addItem(relativeName(file, root), pathText(file));
+    }
+    header_->setCurrentIndex(-1);
     filterFiles(search_->text());
     if (!files_->currentItem())
         for (QTreeWidgetItemIterator it(files_); *it; ++it)
@@ -523,6 +611,58 @@ void MainWindow::updateSelection() {
         }
     }
     dependencies_->expandAll();
+    // The check starts from the file chosen in the tree; the header stays the user's pick.
+    includer_->setCurrentIndex(includer_->findData(pathText(file)));
+    if (tabs_->currentIndex() == 2) checkInclude();
+}
+// A new includer → header edge closes a cycle exactly when header already reaches includer.
+void MainWindow::checkInclude() {
+    const auto from = includer_->currentData().toString();
+    const auto to = header_->currentData().toString();
+    std::set<std::pair<QString, QString>> chain;
+    QString message;
+    QString style;
+    bool showProposal = false;
+    bool closesCycle = false;
+    if (from.isEmpty() || to.isEmpty() || !dependencyGraph_) {
+        message = tr("Выберите файл и заголовок, чтобы узнать, замкнётся ли цикл.");
+    } else {
+        const auto includer = nativePath(from);
+        const auto header = nativePath(to);
+        const auto directIncludes = dependencyGraph_->includes(includer);
+        if (std::ranges::find(directIncludes, header) != directIncludes.end()) {
+            message = tr("Подключение уже существует.");
+        } else if (const auto path = dependencyGraph_->shortestPath(header, includer)) {
+            if (includer == header) {
+                message = tr("Цикл замкнётся: файл подключит сам себя.");
+            } else {
+                QStringList names{pathText(includer.filename())};
+                for (std::size_t i = 0; i < path->size(); ++i) {
+                    names << pathText((*path)[i].filename());
+                    if (i + 1 < path->size()) chain.emplace(pathText((*path)[i]), pathText((*path)[i + 1]));
+                }
+                message = tr("Цикл замкнётся: %1\nПричина: %2 уже подключает %3%4.")
+                    .arg(names.join(QStringLiteral(" → ")), names[1], names[0],
+                         path->size() > 2 ? tr(" косвенно") : QString());
+            }
+            style = QStringLiteral("color: #ef4444;");
+            showProposal = true;
+            closesCycle = true;
+        } else if (result_.status == headerscope::ScanStatus::partial) {
+            message = tr("В доступных данных цикл не найден. Анализ завершился частично.");
+        } else {
+            message = tr("Цикл не возникнет: %1 не подключает %2 ни прямо, ни косвенно.")
+                .arg(pathText(header.filename()), pathText(includer.filename()));
+            style = QStringLiteral("color: #16a34a;");
+            showProposal = true;
+        }
+    }
+    checkResult_->setText(message);
+    checkResult_->setStyleSheet(style);
+    if (tabs_->currentIndex() != 2) return;
+    graph_->highlightChain(std::move(chain));
+    if (showProposal) graph_->showProposedInclude(from, to, closesCycle);
+    else graph_->showProposedInclude({}, {}, false);
 }
 // Highlights every edge lying on some include path from the clicked dependent to the selected file.
 void MainWindow::showChain(QTreeWidgetItem* dependent) {
@@ -551,7 +691,7 @@ void MainWindow::showCycles(const std::vector<CycleDetails>& groups) {
     cycles_->clear();
     updateCycleFocus();
     GraphPlaceholder::EdgeColors edgeColors;
-    std::size_t cycleCount = 0;
+    cycleCount_ = 0;
     for (std::size_t i = 0; i < groups.size(); ++i) {
         const auto& [fileCount, chains] = groups[i];
         auto* group = new QTreeWidgetItem(cycles_, {tr("Группа %1 · файлов: %2 · циклов: %3")
@@ -563,7 +703,7 @@ void MainWindow::showCycles(const std::vector<CycleDetails>& groups) {
         groupFont.setBold(true);
         group->setFont(0, groupFont);
         for (const auto& chain : chains) {
-            const auto color = cycleColor(cycleCount++);
+            const auto color = cycleColor(cycleCount_++);
             QStringList names, paths;
             for (const auto& step : chain) {
                 names << pathText(step.filename());
@@ -587,7 +727,7 @@ void MainWindow::showCycles(const std::vector<CycleDetails>& groups) {
         empty->setFlags(Qt::ItemIsEnabled);
     }
     cycles_->expandAll();
-    cycleBadge_->setText(QString::number(cycleCount));
+    tabs_->setTabText(1, tr("Циклы (%1)").arg(cycleCount_));
     graph_->setCycleHighlights(std::move(edgeColors));
 }
 void MainWindow::updateCycleFocus() {
@@ -631,10 +771,17 @@ void MainWindow::retranslateUi() {
     fit_->setText(tr("Уместить граф"));
     files_->setAccessibleName(tr("Файлы проекта"));
     search_->setPlaceholderText(tr("Найти файл…"));
-    tabs_->setTabText(0, tr("Граф")); tabs_->setTabText(1, tr("Циклы"));
+    tabs_->setTabText(0, tr("Граф"));
+    tabs_->setTabText(1, dependencyGraph_ ? tr("Циклы (%1)").arg(cycleCount_) : tr("Циклы"));
+    tabs_->setTabText(2, tr("Проверка #include"));
+    includer_->setPlaceholderText(tr("Выберите файл"));
+    includer_->setAccessibleName(tr("Файл, в который добавляется #include"));
+    header_->setPlaceholderText(tr("Выберите заголовок"));
+    header_->setAccessibleName(tr("Подключаемый заголовок"));
     dependencies_->setAccessibleName(tr("Подключения и зависимые файлы"));
     cycles_->setAccessibleName(tr("Циклические группы"));
     allCycles_->setText(tr("Показать все циклы"));
+    if (auto* toggle = findChild<QAbstractButton*>(QStringLiteral("themeToggle"))) toggle->setAccessibleName(tr("Тёмная тема"));
     diagnostics_->setHeaderLabels({tr("Уровень"), tr("Сообщение"), tr("Файл"), tr("Строка")});
     const auto* current = files_->currentItem();
     if (!current || !current->data(0, Qt::UserRole).isValid()) selected_->setText(tr("Выберите файл"));
@@ -649,5 +796,6 @@ void MainWindow::retranslateUi() {
         row->setText(1, language::diagnosticText(row->data(1, Qt::UserRole + 42).toString()));
         row->setToolTip(1, row->text(1));
     }
+    checkInclude();
     updateSummary();
 }

@@ -7,7 +7,9 @@
 #include <QGraphicsTextItem>
 #include "path_utils.hpp"
 #include <headerscope/demo/fixture.hpp>
+#include <QAbstractButton>
 #include <QApplication>
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -22,6 +24,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QStyleHints>
 #include <QStackedWidget>
 #include <QTabBar>
 #include <QTemporaryDir>
@@ -46,6 +49,13 @@ const QGraphicsLineItem* edgeLine(const MainWindow& window, const QString& from,
                  && QFileInfo(line->data(3).toString()).fileName() == to) {
             return line;
         }
+    }
+    return nullptr;
+}
+const QGraphicsLineItem* proposedIncludeLine(const MainWindow& window) {
+    for (auto* item : window.findChild<GraphPlaceholder*>()->scene()->items()) {
+        if (const auto* line = qgraphicsitem_cast<QGraphicsLineItem*>(item); line && line->pen().style() == Qt::DashLine)
+            return line;
     }
     return nullptr;
 }
@@ -93,7 +103,8 @@ private slots:
         QCoreApplication::processEvents();
         QCOMPARE(window.findChild<QPushButton*>("analyzeButton")->text(), QStringLiteral("Analyze"));
         QCOMPARE(window.findChild<QPushButton*>("exportButton")->text(), QStringLiteral("Export graph…"));
-        QCOMPARE(window.findChild<QTabBar*>("viewTabs")->tabText(1), QStringLiteral("Cycles"));
+        QCOMPARE(window.findChild<QTabBar*>("viewTabs")->tabText(1), QStringLiteral("Cycles (1)"));
+        QCOMPARE(window.findChild<QTabBar*>("viewTabs")->tabText(2), QStringLiteral("#include check"));
         QCOMPARE(dependencies->topLevelItem(0)->text(0), QStringLiteral("Dependent files · 2"));
         QVERIFY(cycles->topLevelItem(0)->text(0).startsWith(QStringLiteral("Group 1")));
         QCOMPARE(files->currentItem(), selected);
@@ -106,6 +117,7 @@ private slots:
         QCOMPARE(window.findChild<QPushButton*>("analyzeButton")->text(), QStringLiteral("Анализировать"));
         QCOMPARE(window.findChild<QPushButton*>("exportButton")->text(), QStringLiteral("Экспорт графа…"));
         QCOMPARE(dependencies->topLevelItem(0)->text(0), QStringLiteral("Зависимые файлы · 2"));
+        QCOMPARE(window.findChild<QTabBar*>("viewTabs")->tabText(1), QStringLiteral("Циклы (1)"));
         QCOMPARE(files->currentItem(), selected);
     }
     void languageSwitchDuringAnalysisAndDiagnostics() {
@@ -331,7 +343,7 @@ private slots:
         const auto* main = edgeLine(window, "main.cpp", "a.h");
         QVERIFY(ab && ba && be && en && nb && main);
         const auto normalColor = ab->pen().color();
-        QCOMPARE(window.findChild<QLabel*>("tabBadge")->text(), QStringLiteral("2"));
+        QCOMPARE(window.findChild<QTabBar*>("viewTabs")->tabText(1), QStringLiteral("Циклы (2)"));
         auto* details = window.findChild<QStackedWidget*>("details");
         QCOMPARE(details->currentIndex(), 0);
         auto* tabs = window.findChild<QTabBar*>("viewTabs");
@@ -400,6 +412,113 @@ private slots:
         QCOMPARE(stops.back().second, markerColor(group->child(1)));
         QCOMPARE(reverse->pen().color(), markerColor(group->child(0)));
         QVERIFY(shared->line().p1().y() != reverse->line().p1().y());
+    }
+    void proposedIncludeShowsCycleOnGraph() {
+        MainWindow window;
+        window.showResult(chain()); // main.cpp → a.h → b.h
+        window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(2);
+        QCOMPARE(window.findChild<QStackedWidget*>("details")->currentIndex(), 2);
+        auto* includer = window.findChild<QComboBox*>("checkIncluder");
+        auto* header = window.findChild<QComboBox*>("checkHeader");
+        auto* answer = window.findChild<QLabel*>("checkResult");
+        QCOMPARE(header->currentIndex(), -1);
+        QVERIFY(answer->text().startsWith(QStringLiteral("Выберите")));
+        const auto pick = [](QComboBox* combo, const QString& name) {
+            combo->setCurrentIndex(combo->findText(name));
+        };
+        pick(includer, "b.h"); pick(header, "main.cpp");
+        QCOMPARE(answer->text().section(QLatin1Char('\n'), 0, 0),
+                 QStringLiteral("Цикл замкнётся: b.h → main.cpp → a.h → b.h"));
+        const auto* ma = edgeLine(window, "main.cpp", "a.h");
+        const auto* ab = edgeLine(window, "a.h", "b.h");
+        QVERIFY(ma && ab);
+        QCOMPARE(ma->pen().width(), 3);
+        QCOMPARE(ab->pen().width(), 3);
+        QVERIFY(proposedIncludeLine(window));
+        QCOMPARE(proposedIncludeLine(window)->pen().color(), QColor("#ef4444"));
+
+        auto* selector = window.findChild<QComboBox*>("languageSelector");
+        selector->setCurrentIndex(1);
+        QCOMPARE(answer->text(), QStringLiteral("This include would create a cycle: b.h → main.cpp → a.h → b.h\n"
+                                                "main.cpp already includes b.h indirectly."));
+        QCOMPARE(includer->currentText(), QStringLiteral("b.h"));
+        QCOMPARE(header->currentText(), QStringLiteral("main.cpp"));
+        QCOMPARE(header->placeholderText(), QStringLiteral("Select a header"));
+        QVERIFY(proposedIncludeLine(window));
+        QVERIFY(proposedIncludeLine(window)->toolTip().startsWith(QStringLiteral("Proposed include:")));
+        selector->setCurrentIndex(0);
+        QVERIFY(answer->text().startsWith(QStringLiteral("Цикл замкнётся")));
+
+        pick(includer, "main.cpp"); pick(header, "b.h");
+        QVERIFY(answer->text().startsWith(QStringLiteral("Цикл не возникнет")));
+        QCOMPARE(ab->pen().width(), 2);
+        QVERIFY(proposedIncludeLine(window));
+        QCOMPARE(proposedIncludeLine(window)->pen().color(), QColor("#16a34a"));
+
+        window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(0);
+        QVERIFY(!proposedIncludeLine(window)); // The suggestion is drawn only on its own tab.
+    }
+    void proposedIncludeRecognizesExistingEdge() {
+        MainWindow window;
+        auto result = chain();
+        const auto root = result.files.front().parent_path();
+        result.edges.push_back({root / "b.h", root / "a.h", 4});
+        window.showResult(result);
+        window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(2);
+        auto* includer = window.findChild<QComboBox*>("checkIncluder");
+        auto* header = window.findChild<QComboBox*>("checkHeader");
+        includer->setCurrentIndex(includer->findText("b.h"));
+        header->setCurrentIndex(header->findText("main.cpp"));
+        QVERIFY(proposedIncludeLine(window));
+
+        includer->setCurrentIndex(includer->findText("a.h"));
+        header->setCurrentIndex(header->findText("b.h"));
+        QCOMPARE(window.findChild<QLabel*>("checkResult")->text(), QStringLiteral("Подключение уже существует."));
+        QVERIFY(!proposedIncludeLine(window));
+    }
+    void proposedIncludeUsesAvailablePartialGraph() {
+        MainWindow window;
+        auto result = chain();
+        result.status = headerscope::ScanStatus::partial;
+        window.showResult(result);
+        window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(2);
+        auto* includer = window.findChild<QComboBox*>("checkIncluder");
+        auto* header = window.findChild<QComboBox*>("checkHeader");
+        auto* answer = window.findChild<QLabel*>("checkResult");
+
+        includer->setCurrentIndex(includer->findText("b.h"));
+        header->setCurrentIndex(header->findText("main.cpp"));
+        QVERIFY(answer->text().startsWith(QStringLiteral("Цикл замкнётся")));
+        QVERIFY(proposedIncludeLine(window));
+        QCOMPARE(proposedIncludeLine(window)->pen().color(), QColor("#ef4444"));
+
+        includer->setCurrentIndex(includer->findText("main.cpp"));
+        header->setCurrentIndex(header->findText("b.h"));
+        QCOMPARE(answer->text(), QStringLiteral("В доступных данных цикл не найден. Анализ завершился частично."));
+        QVERIFY(!proposedIncludeLine(window));
+    }
+    void themeToggleSwitchesScheme() {
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+        QSKIP("Overriding the colour scheme needs Qt 6.8");
+#else
+        MainWindow window;
+        auto* toggle = window.findChild<QAbstractButton*>("themeToggle");
+        QVERIFY(toggle);
+        auto* selector = window.findChild<QComboBox*>("languageSelector");
+        selector->setCurrentIndex(1);
+        QCOMPARE(window.findChild<QLabel*>("themeLabel")->text(), QStringLiteral("Dark theme"));
+        QCOMPARE(toggle->accessibleName(), QStringLiteral("Dark theme"));
+        selector->setCurrentIndex(0);
+        QCOMPARE(window.findChild<QLabel*>("themeLabel")->text(), QStringLiteral("Тёмная тема"));
+        auto* hints = QGuiApplication::styleHints();
+        const auto before = hints->colorScheme();
+        toggle->click();
+        if (hints->colorScheme() == before) QSKIP("Platform ignores colour scheme requests");
+        const bool dark = hints->colorScheme() == Qt::ColorScheme::Dark;
+        QCOMPARE(toggle->isChecked(), dark);
+        QVERIFY(window.styleSheet().contains(QLatin1String(dark ? "#0f172a" : "#f1f5f9")));
+        hints->unsetColorScheme();
+#endif
     }
     void acyclicHasNoCycleGroups() {
         MainWindow window;

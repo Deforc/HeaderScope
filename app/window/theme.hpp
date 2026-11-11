@@ -29,7 +29,6 @@ QTabBar::tab { background: transparent; color: @muted; border: none; border-bott
     padding: 4px 2px 6px 2px; margin-right: 18px; font-size: 15px; font-weight: 600; }
 QTabBar::tab:selected { color: @accent; border-bottom-color: @accent; }
 QTabBar::tab:hover:!selected { color: @text; }
-QLabel#tabBadge { background: @line; color: @muted; border-radius: 6px; font-weight: 600; }
 QWidget#panel { background: @card; border: 1px solid @line; border-radius: 10px; }
 QLineEdit, QComboBox { background: @field; color: @text; border: 1px solid @line; border-radius: 6px;
     padding: 6px 10px; selection-background-color: @accent; selection-color: white; }
