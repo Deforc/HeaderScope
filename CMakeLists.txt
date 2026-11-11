@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(HeaderScope LANGUAGES C CXX)
+project(HeaderScope VERSION 0.1.0 LANGUAGES C CXX)
 
 include(CTest)
 

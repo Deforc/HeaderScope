@@ -2,6 +2,7 @@ import argparse
 from collections import Counter
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -39,10 +40,9 @@ def expected_snapshot(targets, graph):
     }
 
 
-def run_inspect(inspect, database, project, *options, status=0):
-    command = [str(inspect), str(database), "--root", str(project)]
+def run_cli(inspect, *args, status=0):
     result = subprocess.run(
-        [*command, *map(str, options)], capture_output=True, encoding="utf-8",
+        [str(inspect), *map(str, args)], capture_output=True, encoding="utf-8",
         errors="replace", timeout=15,
     )
     if result.returncode != status:
@@ -51,6 +51,10 @@ def run_inspect(inspect, database, project, *options, status=0):
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     return result
+
+
+def run_inspect(inspect, database, project, *options, status=0):
+    return run_cli(inspect, database, "--root", project, *options, status=status)
 
 
 def edge_counts(snapshot):
@@ -87,6 +91,17 @@ def expect_output(output, *fragments):
 
 
 def check_workflow(inspect, work, project):
+    help_output = run_cli(inspect, "--help").stdout
+    expect_output(
+        help_output, "Usage:", "Examples:", "Exit codes:", "compile_commands.json",
+        "--version", "--cycles-only", "--rank", "--root", "--save", "--compare", "--export",
+    )
+    if run_cli(inspect, "-h").stdout != help_output:
+        raise RuntimeError("The -h shortcut returned different help")
+    version = run_cli(inspect, "--version").stdout.strip()
+    if not re.fullmatch(r"headerscope_inspect [0-9]+\.[0-9]+\.[0-9]+", version):
+        raise RuntimeError(f"Unexpected version output: {version!r}")
+
     demo = Path(__file__).resolve().parents[2] / "include-chain"
     for filename in ("main.cpp", "a.h", "b.h", "extra.h"):
         shutil.copyfile(demo / filename, project / filename)
@@ -96,8 +111,11 @@ def check_workflow(inspect, work, project):
     write_database(database, project, [{"sources": ["main.cpp"], "defines": ["HEADERSCOPE_DEMO_EXTRA"]}])
     baseline = run_inspect(inspect, database, project, project / "b.h", "--save", snapshot)
     expect_output(
-        baseline.stdout, "Complete scan: 4 files, 3 include directives", "a.h:6 -> extra.h",
-        "Cycle groups: 0", "Dependent chains for b.h:", "main.cpp -> a.h -> b.h",
+        baseline.stdout, "== Analysis ==\n  Complete scan: 4 files, 3 include directives",
+        "== Include graph ==\n  a.h\n    -> b.h (line 3)\n    -> extra.h (line 6)",
+        "Files without direct includes (2)\n    b.h\n    extra.h",
+        "== Cycles ==\n  Cycle groups: 0",
+        "== Dependent chains ==\n  For b.h\n    a.h -> b.h\n    main.cpp -> a.h -> b.h",
     )
     baseline_bytes = snapshot.read_bytes()
 
@@ -117,16 +135,29 @@ def check_workflow(inspect, work, project):
     write_database(database, project, [{"sources": ["main.cpp"], "defines": ["HEADERSCOPE_DEMO_CYCLE"]}])
     comparison = run_inspect(inspect, database, project, "--compare", snapshot, "--rank")
     expect_output(
-        comparison.stdout, "Added includes: 1\n  b.h:4 -> a.h",
-        "Removed includes: 1\n  a.h:6 -> extra.h",
+        comparison.stdout, "== Snapshot comparison ==", "Added includes: 1\n    b.h:4 -> a.h",
+        "Removed includes: 1\n    a.h:6 -> extra.h",
         "New or expanded cycle groups: 1", "a.h -> b.h -> a.h",
-        "Affected source files: 1\n  main.cpp", "1. a.h: sources: 1, direct includers: 2",
+        "Affected source files: 1\n    main.cpp", "1. a.h: sources: 1, direct includers: 2",
     )
+
+    cycles = run_inspect(inspect, database.parent, project, "--cycles-only").stdout
+    expect_output(cycles, "== Cycles ==\n  Cycle groups: 1", "Group 1 (2 files, 1 cycle)", "a.h -> b.h -> a.h")
+    if "== Include graph ==" in cycles:
+        raise RuntimeError("--cycles-only printed the full graph")
+
+    comparison_cycles = run_inspect(inspect, database, project, "--compare", snapshot, "--cycles-only").stdout
+    expect_output(comparison_cycles, "New or expanded cycle groups: 1", "a.h -> b.h -> a.h")
+    if any(section in comparison_cycles for section in ("Added includes:", "Removed includes:", "Affected source files:")):
+        raise RuntimeError("--cycles-only printed non-cycle comparison details")
+
+    incompatible = run_inspect(inspect, database, project, "--cycles-only", "--rank", status=2)
+    expect_output(incompatible.stderr, "--cycles-only cannot be combined with --rank")
 
     with (project / "main.cpp").open("a", encoding="utf-8") as source:
         source.write('\n#include "missing.h"\n')
     partial = run_inspect(inspect, database, project, "--save", snapshot, status=1)
-    expect_output(partial.stdout, "Partial scan:", "main.cpp:1 -> a.h")
+    expect_output(partial.stdout, "Partial scan:", "main.cpp\n    -> a.h (line 1)")
     expect_output(partial.stderr, "missing.h")
     if snapshot.read_bytes() != baseline_bytes:
         raise RuntimeError("The partial scan changed the saved baseline")

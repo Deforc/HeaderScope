@@ -1,5 +1,6 @@
 find_package(LLVM REQUIRED CONFIG)
 add_executable(headerscope_inspect main.cpp snapshot.cpp)
+target_compile_definitions(headerscope_inspect PRIVATE HEADERSCOPE_VERSION="${PROJECT_VERSION}")
 target_include_directories(headerscope_inspect SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_link_libraries(headerscope_inspect PRIVATE HeaderScope::scanner HeaderScope::graph LLVMSupport)
 
