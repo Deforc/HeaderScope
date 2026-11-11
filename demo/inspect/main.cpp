@@ -22,11 +22,16 @@ struct Options {
     std::optional<fs::path> exportFile;
 };
 
-void requireDistinctOutputs(const fs::path& graph, const fs::path& snapshot)
+bool sameFile(const fs::path& first, const fs::path& second)
 {
     std::error_code error;
-    if (fs::equivalent(graph, snapshot, error) ||
-        fs::weakly_canonical(fs::absolute(graph)) == fs::weakly_canonical(fs::absolute(snapshot)))
+    return fs::equivalent(first, second, error) ||
+        fs::weakly_canonical(fs::absolute(first)) == fs::weakly_canonical(fs::absolute(second));
+}
+
+void requireDistinctOutputs(const fs::path& graph, const fs::path& snapshot)
+{
+    if (sameFile(graph, snapshot))
         throw std::invalid_argument("Graph export and snapshot must use different files");
 }
 
@@ -59,8 +64,17 @@ Options parseOptions(int argc, char** argv)
     if (!fs::is_directory(options.root))
         throw std::invalid_argument("Project root must be an existing directory");
     options.root = fs::canonical(options.root);
-    if (options.exportFile && options.save)
-        requireDistinctOutputs(*options.exportFile, *options.save);
+    if (options.exportFile) {
+        const auto& output = *options.exportFile;
+        auto database = fs::path(argv[1]);
+        std::error_code error;
+        if (fs::is_directory(database, error))
+            database /= "compile_commands.json";
+        if (sameFile(output, database) || (options.compare && sameFile(output, *options.compare)))
+            throw std::invalid_argument("Graph export must not overwrite an input file");
+        if (options.save)
+            requireDistinctOutputs(output, *options.save);
+    }
     return options;
 }
 
