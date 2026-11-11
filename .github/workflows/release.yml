@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing Git tag (e.g. v1.0.0) with a successful Build release packages run.'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Validate tag name
+        run: |
+          if [[ "$RELEASE_TAG" != v* ]] || ! git check-ref-format "refs/tags/$RELEASE_TAG"; then
+            echo '::error::Enter a version tag starting with v, for example v1.0.0.'
+            exit 1
+          fi
+      - name: Download packages built from the tagged commit
+        run: |
+          ref=$(jq -rn --arg ref "refs/tags/$RELEASE_TAG" '$ref | @uri')
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$ref" --jq .sha)
+          run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml \
+            --commit "$sha" --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          if [[ -z "$run_id" ]]; then
+            echo "::error::No successful package build for $RELEASE_TAG ($sha). Run Build release packages for this tag first."
+            exit 1
+          fi
+          if ! gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --dir release-assets \
+            --name HeaderScope-macos-arm64 --name HeaderScope-windows-x64; then
+            echo "::error::Could not download packages from build run $run_id. Re-run Build release packages if the artifacts expired."
+            exit 1
+          fi
+          for platform in macos-arm64 windows-x64; do
+            if [[ ! -s "release-assets/HeaderScope-$platform/HeaderScope-$platform.zip" ]]; then
+              echo "::error::Missing $platform package in build run $run_id. Re-run Build release packages for this tag."
+              exit 1
+            fi
+          done
+      - name: Publish GitHub Release
+        run: |
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
+            release-assets/HeaderScope-macos-arm64/HeaderScope-macos-arm64.zip \
+            release-assets/HeaderScope-windows-x64/HeaderScope-windows-x64.zip
