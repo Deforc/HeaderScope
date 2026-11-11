@@ -22,6 +22,7 @@ public:
     std::optional<FileChain> shortestPath(const std::filesystem::path& from,
                                           const std::filesystem::path& to) const;
     std::vector<CycleGroup> cycles() const;
+    std::vector<FileChain> simpleCycles(const CycleGroup& group) const;
 
 private:
     using Adjacency = std::map<std::filesystem::path, FileChain>;

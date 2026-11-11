@@ -106,7 +106,7 @@ def check_workflow(inspect, work, project):
     expect_output(
         comparison.stdout, "Added includes: 1\n  b.h:4 -> a.h",
         "Removed includes: 1\n  a.h:6 -> extra.h",
-        "New or expanded cycle groups: 1\na.h -> b.h -> a.h",
+        "New or expanded cycle groups: 1", "a.h -> b.h -> a.h",
         "Affected source files: 1\n  main.cpp", "1. a.h: sources: 1, direct includers: 2",
     )
 
