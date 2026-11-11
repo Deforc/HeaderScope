@@ -7,6 +7,7 @@
 #include <headerscope/scanner.hpp>
 #endif
 #include <QtConcurrent/QtConcurrentRun>
+#include <QComboBox>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -214,7 +215,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     tabs_ = new QTabBar;
     tabs_->setObjectName(QStringLiteral("viewTabs"));
     tabs_->setDrawBase(false); tabs_->setExpanding(false);
-    tabs_->addTab(tr("Граф")); tabs_->addTab(tr("Циклы"));
+    tabs_->addTab(tr("Граф")); tabs_->addTab(tr("Циклы")); tabs_->addTab(tr("Проверка #include"));
     cycleBadge_ = new QLabel(QStringLiteral("0"));
     cycleBadge_->setObjectName(QStringLiteral("tabBadge"));
     cycleBadge_->setAlignment(Qt::AlignCenter); cycleBadge_->setMinimumSize(26, 20); // ponytail: fits 2 digits
@@ -254,11 +255,33 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     allCycles_ = new QPushButton(tr("Показать все циклы"));
     allCycles_->setObjectName(QStringLiteral("allCyclesButton"));
     allCycles_->setEnabled(false);
+    includer_ = new QComboBox;
+    includer_->setObjectName(QStringLiteral("checkIncluder"));
+    includer_->setPlaceholderText(tr("Выберите файл"));
+    includer_->setAccessibleName(tr("Файл, в который добавляется #include"));
+    header_ = new QComboBox;
+    header_->setObjectName(QStringLiteral("checkHeader"));
+    header_->setPlaceholderText(tr("Выберите заголовок"));
+    header_->setAccessibleName(tr("Подключаемый заголовок"));
+    checkResult_ = new QLabel;
+    checkResult_->setObjectName(QStringLiteral("checkResult"));
+    checkResult_->setWordWrap(true); checkResult_->setTextFormat(Qt::PlainText);
+    auto* check = new QWidget;
+    auto* checkLayout = new QVBoxLayout(check);
+    checkLayout->setContentsMargins(0, 0, 0, 0);
+    checkLayout->addWidget(new QLabel(tr("Файл")));
+    checkLayout->addWidget(includer_);
+    checkLayout->addWidget(new QLabel(tr("Добавить #include заголовка")));
+    checkLayout->addWidget(header_);
+    checkLayout->addSpacing(8);
+    checkLayout->addWidget(checkResult_);
+    checkLayout->addStretch();
     // The right column describes whatever the tab above the graph shows.
     details_ = new QStackedWidget;
     details_->setObjectName(QStringLiteral("details"));
     details_->addWidget(panel(tr("ЗАВИСИМОСТИ"), dependencies_, header));
     details_->addWidget(panel(tr("ЦИКЛИЧЕСКИЕ ЗАВИСИМОСТИ"), cycles_, allCycles_));
+    details_->addWidget(panel(tr("ПРОВЕРКА НОВОГО #INCLUDE"), check));
     horizontal->addWidget(details_);
     horizontal->setStretchFactor(0, 1); horizontal->setStretchFactor(1, 3); horizontal->setStretchFactor(2, 2);
     horizontal->setSizes({220, 580, 360}); horizontal->setChildrenCollapsible(false);
@@ -298,7 +321,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         details_->setCurrentIndex(index);
         if (index == 0) showChain(dependencies_->currentItem());
         graph_->showCycleHighlights(index == 1);
+        if (index == 2) checkInclude(); else graph_->showProposedInclude({}, {}, false);
     });
+    for (auto* combo : {includer_, header_})
+        connect(combo, &QComboBox::currentIndexChanged, this, &MainWindow::checkInclude);
     const auto activate = [this](QTreeWidgetItem* item) {
         if (item->data(0, Qt::UserRole).isValid()) selectPath(item->data(0, Qt::UserRole).toString());
     };
@@ -359,6 +385,7 @@ void MainWindow::runAnalysis() {
     updateCycleFocus();
     selected_->setText(tr("Выберите файл")); selectedPath_->clear(); cycleBadge_->setText(QStringLiteral("0"));
     graph_->setResult(result_);
+    includer_->clear(); header_->clear(); checkInclude();
     summary_->setText(tr("Анализ проекта…"));
     statusBar()->showMessage(tr("Анализ выполняется в фоне"));
     watcher_.setFuture(QtConcurrent::run([input]() -> AnalysisResult {
@@ -433,6 +460,10 @@ void MainWindow::showAnalysis(AnalysisResult analysis) {
     populateFileTree(files_, result_.files, root);
     graph_->setResult(result_);
     showCycles(analysis.groups);
+    for (const auto& file : result_.files) {
+        for (auto* combo : {includer_, header_}) combo->addItem(relativeName(file, root), pathText(file));
+    }
+    header_->setCurrentIndex(-1);
     filterFiles(search_->text());
     if (!files_->currentItem())
         for (QTreeWidgetItemIterator it(files_); *it; ++it)
@@ -491,6 +522,38 @@ void MainWindow::updateSelection() {
         }
     }
     dependencies_->expandAll();
+    // The check starts from the file chosen in the tree; the header stays the user's pick.
+    includer_->setCurrentIndex(includer_->findData(pathText(file)));
+    if (tabs_->currentIndex() == 2) checkInclude();
+}
+// A new includer → header edge closes a cycle exactly when header already reaches includer.
+void MainWindow::checkInclude() {
+    const auto from = includer_->currentData().toString();
+    const auto to = header_->currentData().toString();
+    std::set<std::pair<QString, QString>> chain;
+    std::optional<headerscope::FileChain> path;
+    if (from.isEmpty() || to.isEmpty() || !dependencyGraph_) {
+        checkResult_->setText(tr("Выберите файл и заголовок, чтобы узнать, замкнётся ли цикл."));
+        checkResult_->setStyleSheet({});
+    } else if ((path = dependencyGraph_->shortestPath(nativePath(to), nativePath(from)))) {
+        QStringList names{pathText(nativePath(from).filename())};
+        for (std::size_t i = 0; i < path->size(); ++i) {
+            names << pathText((*path)[i].filename());
+            if (i + 1 < path->size()) chain.emplace(pathText((*path)[i]), pathText((*path)[i + 1]));
+        }
+        checkResult_->setText(tr("Цикл замкнётся: %1\nПричина: %2 уже подключает %3%4.")
+            .arg(names.join(QStringLiteral(" → ")), names[1], names[0],
+                 path->size() > 2 ? tr(" косвенно") : QString()));
+        if (from == to) checkResult_->setText(tr("Цикл замкнётся: файл подключит сам себя."));
+        checkResult_->setStyleSheet(QStringLiteral("color: #ef4444;"));
+    } else {
+        checkResult_->setText(tr("Цикл не возникнет: %1 не подключает %2 ни прямо, ни косвенно.")
+            .arg(pathText(nativePath(to).filename()), pathText(nativePath(from).filename())));
+        checkResult_->setStyleSheet(QStringLiteral("color: #16a34a;"));
+    }
+    if (tabs_->currentIndex() != 2) return;
+    graph_->highlightChain(std::move(chain));
+    graph_->showProposedInclude(from, to, path.has_value());
 }
 // Highlights every edge lying on some include path from the clicked dependent to the selected file.
 void MainWindow::showChain(QTreeWidgetItem* dependent) {

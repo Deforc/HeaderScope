@@ -9,6 +9,7 @@
 #include <vector>
 
 class GraphPlaceholder;
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QProgressBar;
@@ -52,6 +53,7 @@ private:
     void showChain(QTreeWidgetItem* dependent);
     void showCycles(const std::vector<CycleDetails>& groups);
     void updateCycleFocus();
+    void checkInclude();
     void filterFiles(const QString& text);
     void selectPath(const QString& path);
     void setBusy(bool busy);
@@ -66,6 +68,9 @@ private:
     QTreeWidget* dependencies_;
     QTreeWidget* diagnostics_;
     QTreeWidget* cycles_;
+    QComboBox* includer_;
+    QComboBox* header_;
+    QLabel* checkResult_;
     GraphPlaceholder* graph_;
     QLabel* summary_;
     QLabel* selected_;

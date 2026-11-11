@@ -3,6 +3,7 @@
 #include "path_utils.hpp"
 #include <headerscope/demo/fixture.hpp>
 #include <QApplication>
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -310,6 +311,44 @@ private slots:
         QCOMPARE(stops.back().second, markerColor(group->child(1)));
         QCOMPARE(reverse->pen().color(), markerColor(group->child(0)));
         QVERIFY(shared->line().p1().y() != reverse->line().p1().y());
+    }
+    void proposedIncludeShowsCycleOnGraph() {
+        MainWindow window;
+        window.showResult(chain()); // main.cpp → a.h → b.h
+        window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(2);
+        QCOMPARE(window.findChild<QStackedWidget*>("details")->currentIndex(), 2);
+        auto* includer = window.findChild<QComboBox*>("checkIncluder");
+        auto* header = window.findChild<QComboBox*>("checkHeader");
+        auto* answer = window.findChild<QLabel*>("checkResult");
+        QCOMPARE(header->currentIndex(), -1);
+        QVERIFY(answer->text().startsWith(QStringLiteral("Выберите")));
+        const auto pick = [](QComboBox* combo, const QString& name) {
+            combo->setCurrentIndex(combo->findText(name));
+        };
+        const auto proposed = [&] {
+            for (auto* item : window.findChild<GraphPlaceholder*>()->scene()->items())
+                if (auto* line = qgraphicsitem_cast<QGraphicsLineItem*>(item); line && line->pen().style() == Qt::DashLine)
+                    return line;
+            return static_cast<QGraphicsLineItem*>(nullptr);
+        };
+        pick(includer, "b.h"); pick(header, "main.cpp");
+        QCOMPARE(answer->text().section(QLatin1Char('\n'), 0, 0),
+                 QStringLiteral("Цикл замкнётся: b.h → main.cpp → a.h → b.h"));
+        const auto* ma = edgeLine(window, "main.cpp", "a.h");
+        const auto* ab = edgeLine(window, "a.h", "b.h");
+        QVERIFY(ma && ab);
+        QCOMPARE(ma->pen().width(), 3);
+        QCOMPARE(ab->pen().width(), 3);
+        QVERIFY(proposed());
+        QCOMPARE(proposed()->pen().color(), QColor("#ef4444"));
+
+        pick(includer, "main.cpp"); pick(header, "b.h");
+        QVERIFY(answer->text().startsWith(QStringLiteral("Цикл не возникнет")));
+        QCOMPARE(ab->pen().width(), 2);
+        QCOMPARE(proposed()->pen().color(), QColor("#16a34a"));
+
+        window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(0);
+        QVERIFY(!proposed()); // The suggestion is drawn only on its own tab.
     }
     void acyclicHasNoCycleGroups() {
         MainWindow window;

@@ -26,6 +26,21 @@ QBrush edgeBrush(const std::vector<QColor>& colors, const QColor& fallback,
     }
     return QBrush(bands);
 }
+// Draws a → b ending at b's box border; `shifted` moves it aside so an opposite edge stays visible.
+std::pair<QGraphicsLineItem*, QGraphicsPolygonItem*> addArrow(QGraphicsScene* scene, QPointF a, QPointF b,
+                                                              bool shifted, const QPen& pen) {
+    const QPointF delta = b - a;
+    const QPointF unit = delta / std::hypot(delta.x(), delta.y());
+    const double boundary = std::min(94.0 / std::max(0.001, std::abs(unit.x())),
+                                     25.0 / std::max(0.001, std::abs(unit.y())));
+    const QPointF normal(-unit.y(), unit.x());
+    const QPointF offset = shifted ? normal * 5 : QPointF{};
+    const QPointF end = b - unit * boundary + offset;
+    auto* line = scene->addLine(QLineF(a + offset, end), pen);
+    auto* arrow = scene->addPolygon(QPolygonF{end, end - unit * 12 + normal * 5, end - unit * 12 - normal * 5},
+                                    QPen(Qt::NoPen), pen.brush());
+    return {line, arrow};
+}
 }
 
 GraphPlaceholder::GraphPlaceholder(QWidget* parent) : QGraphicsView(parent), scene_(new QGraphicsScene(this)) {
@@ -70,18 +85,8 @@ void GraphPlaceholder::setResult(const headerscope::ScanResult& result) {
             loop->setData(2, pathText(from)); loop->setData(3, pathText(to));
             continue;
         }
-        const QPointF delta = b - a;
-        const double length = std::hypot(delta.x(), delta.y());
-        const QPointF unit = delta / length;
-        const double boundary = std::min(94.0 / std::max(0.001, std::abs(unit.x())),
-                                         25.0 / std::max(0.001, std::abs(unit.y())));
-        const QPointF normal(-unit.y(), unit.x());
-        const QPointF offset = edges.contains({to, from}) ? normal * 5 : QPointF{};
-        const QPointF end = b - unit * boundary + offset;
-        auto* line = scene_->addLine(QLineF(a + offset, end), QPen(QColor("#64748b"), 2));
+        const auto [line, arrow] = addArrow(scene_, a, b, edges.contains({to, from}), QPen(QColor("#64748b"), 2));
         line->setToolTip(pathText(from) + QStringLiteral(" → ") + pathText(to));
-        auto* arrow = scene_->addPolygon(QPolygonF{end, end - unit * 12 + normal * 5, end - unit * 12 - normal * 5},
-                                         QPen(Qt::NoPen), QBrush(QColor("#64748b")));
         for (QGraphicsItem* item : {static_cast<QGraphicsItem*>(line), static_cast<QGraphicsItem*>(arrow)}) {
             item->setData(2, pathText(from));
             item->setData(3, pathText(to));
@@ -145,6 +150,7 @@ void GraphPlaceholder::recolor() {
     const auto& highlightedFiles = focus ? focusedFiles_ : showCycles_ ? cycleFiles_ : chainFiles_;
     const std::vector<QColor> emptyColors;
     for (auto* item : scene_->items()) {
+        if (item->data(ProposedRole).toBool()) continue;
         if (auto* box = qgraphicsitem_cast<QGraphicsPathItem*>(item)) {
             const auto file = box->data(0).toString();
             const bool onChain = highlightedFiles.contains(file);
@@ -174,6 +180,29 @@ void GraphPlaceholder::recolor() {
             }
             item->setZValue(on ? 0.5 : 0); // Above other edges, still under the boxes.
         }
+    }
+}
+void GraphPlaceholder::showProposedInclude(const QString& from, const QString& to, bool cycle) {
+    std::map<QString, QPointF> ends;
+    for (auto* item : scene_->items()) {
+        if (item->data(ProposedRole).toBool()) delete item;
+        else if (qgraphicsitem_cast<QGraphicsPathItem*>(item)
+                 && (item->data(0) == from || item->data(0) == to)) ends[item->data(0).toString()] = item->pos();
+    }
+    if (from.isEmpty() || to.isEmpty() || !ends.contains(from) || !ends.contains(to)) return;
+    QPen pen(QColor(cycle ? "#ef4444" : "#16a34a"), 3, Qt::DashLine);
+    std::vector<QGraphicsItem*> items;
+    if (from == to) {
+        const auto point = ends.at(from);
+        items.push_back(scene_->addEllipse(point.x() - 30, point.y() - 62, 60, 60, pen));
+    } else {
+        const auto [line, arrow] = addArrow(scene_, ends.at(from), ends.at(to), true, pen);
+        items = {line, arrow};
+    }
+    for (auto* item : items) {
+        item->setData(ProposedRole, true);
+        item->setZValue(0.75); // Above highlighted edges, still under the boxes.
+        item->setToolTip(tr("Новое подключение: %1 → %2").arg(from, to));
     }
 }
 void GraphPlaceholder::fitGraph() { fitInView(scene_->sceneRect(), Qt::KeepAspectRatio); }

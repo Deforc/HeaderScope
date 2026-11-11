@@ -24,12 +24,15 @@ public:
     void setCycleHighlights(EdgeColors edges);
     void showCycleHighlights(bool show);
     void focusCycle(const QStringList& files, const QColor& color);
+    // Draws a dashed includer → header arrow (red if it closes a cycle); an empty path clears it.
+    void showProposedInclude(const QString& from, const QString& to, bool cycle);
 signals:
     void fileActivated(const QString& path);
 protected:
     void wheelEvent(QWheelEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
 private:
+    static constexpr int ProposedRole = 4;
     void recolor();
     QGraphicsScene* scene_;
     QString selected_;
