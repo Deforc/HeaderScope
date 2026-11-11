@@ -6,10 +6,12 @@
 #include <QString>
 #include <filesystem>
 #include <memory>
+#include <set>
 #include <vector>
 
 class GraphPlaceholder;
 class QComboBox;
+class QCheckBox;
 class QEvent;
 class QLabel;
 class QLineEdit;
@@ -45,6 +47,9 @@ private:
     QComboBox* language_;
     QLabel* heading_;
     QPushButton* fit_;
+    QCheckBox* groupFolders_;
+    QPushButton* collapseFolders_;
+    bool showingResult_ = false;
     struct CycleDetails {
         std::size_t fileCount;
         std::vector<headerscope::FileChain> chains;
@@ -61,6 +66,11 @@ private:
     void chooseDatabase();
     void finishAnalysis();
     void updateSelection();
+    void selectFolder(const QString& folder);
+    void showFolderDependencies(const QString& folder);
+    void updateFolderHeading();
+    QString selectedFolder_;
+    std::set<std::filesystem::path> selectedTargets_;
     void showChain(QTreeWidgetItem* dependent);
     void showCycles(const std::vector<CycleDetails>& groups);
     void updateCycleFocus();

@@ -4,6 +4,7 @@
 #include "theme.hpp"
 #include "language.hpp"
 #include <QComboBox>
+#include <QCheckBox>
 #include <QEvent>
 #include <QSettings>
 #include <headerscope/export.hpp>
@@ -164,6 +165,17 @@ headerscope::ScanResult failure(const QString& message) {
 QString relativeName(const std::filesystem::path& file, const QString& root) {
     return QDir(root).relativeFilePath(pathText(file));
 }
+// Multi-source reverse traversal: every file that reaches at least one selected target.
+std::set<std::filesystem::path> dependentClosure(const headerscope::ScanResult& scan,
+    const std::set<std::filesystem::path>& targets) {
+    std::map<std::filesystem::path, headerscope::FileChain> reverse;
+    for (const auto& edge : scan.edges) reverse[edge.included].push_back(edge.includer);
+    auto visited = targets;
+    std::vector<std::filesystem::path> pending(targets.begin(), targets.end());
+    for (std::size_t i = 0; i < pending.size(); ++i)
+        for (const auto& next : reverse[pending[i]]) if (visited.insert(next).second) pending.push_back(next);
+    return visited;
+}
 // Hides leaves not matching `text`, and directories left without visible children. Returns true if visible.
 bool filterItem(QTreeWidgetItem* item, const QString& text) {
     bool visible = false;
@@ -201,6 +213,7 @@ void populateFileTree(QTreeWidget* tree, const std::vector<std::filesystem::path
             if (!directory) {
                 directory = parent ? new QTreeWidgetItem(parent, {parts[i]}) : new QTreeWidgetItem(tree, {parts[i]});
                 directory->setToolTip(0, key);
+                directory->setData(0, Qt::UserRole + 2, QDir::cleanPath(QDir(root).absoluteFilePath(key)));
                 directory->setIcon(0, folderIcon);
             }
             parent = directory;
@@ -297,6 +310,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     tabs_->setDrawBase(false); tabs_->setExpanding(false);
     tabs_->addTab(tr("Граф")); tabs_->addTab(tr("Циклы")); tabs_->addTab(tr("Проверка #include"));
     auto* center = panel("A → B означает: A подключает B", graph_);
+    groupFolders_ = new QCheckBox(tr("Группировать по папкам"));
+    groupFolders_->setObjectName(QStringLiteral("groupFolders"));
+    groupFolders_->setChecked(true);
+    collapseFolders_ = new QPushButton(tr("Свернуть всё"));
+    collapseFolders_->setObjectName(QStringLiteral("collapseFolders"));
+    auto* graphControls = new QWidget;
+    auto* graphControlsLayout = new QHBoxLayout(graphControls);
+    graphControlsLayout->setContentsMargins(0, 0, 0, 0);
+    graphControlsLayout->addWidget(groupFolders_);
+    graphControlsLayout->addStretch();
+    graphControlsLayout->addWidget(collapseFolders_);
+    static_cast<QVBoxLayout*>(center->layout())->insertWidget(0, graphControls);
     static_cast<QVBoxLayout*>(center->layout())->insertWidget(0, tabs_, 0, Qt::AlignLeft);
     horizontal->addWidget(center);
 
@@ -384,9 +409,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(project_, &QLineEdit::returnPressed, this, &MainWindow::runAnalysis);
     connect(&watcher_, &QFutureWatcher<AnalysisResult>::finished, this, &MainWindow::finishAnalysis);
     connect(files_, &QTreeWidget::currentItemChanged, this, &MainWindow::updateSelection);
+    connect(files_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem* item) {
+        const auto file = item->data(0, Qt::UserRole);
+        if (file.isValid()) graph_->selectFile(nativePath(file.toString()));
+    });
     connect(search_, &QLineEdit::textChanged, this, &MainWindow::filterFiles);
     connect(fit_, &QPushButton::clicked, graph_, &GraphPlaceholder::fitGraph);
+    connect(groupFolders_, &QCheckBox::toggled, graph_, &GraphPlaceholder::setGrouped);
+    connect(collapseFolders_, &QPushButton::clicked, this, [this] {
+        groupFolders_->setChecked(true);
+        graph_->collapseFolders();
+    });
     connect(graph_, &GraphPlaceholder::fileActivated, this, &MainWindow::selectPath);
+    connect(graph_, &GraphPlaceholder::folderActivated, this, &MainWindow::selectFolder);
     connect(dependencies_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) {
         if (tabs_->currentIndex() == 0) showChain(item);
     });
@@ -467,6 +502,7 @@ void MainWindow::runAnalysis() {
     scanInput_ = input;
     setBusy(true);
     // Clear the old view so a failed scan cannot leave a stale graph on screen.
+    selectedFolder_.clear(); selectedTargets_.clear();
     hasResult_ = false; groupCount_ = 0;
     result_ = {}; dependencyGraph_.reset(); files_->clear(); dependencies_->clear(); diagnostics_->clear(); cycles_->clear();
     updateCycleFocus();
@@ -549,8 +585,9 @@ void MainWindow::showAnalysis(AnalysisResult analysis) {
     }
     displayedRoot_ = nativePath(root);
     export_->setEnabled(true);
+    showingResult_ = true;
     populateFileTree(files_, result_.files, root);
-    graph_->setResult(result_);
+    graph_->setResult(result_, displayedRoot_);
     showCycles(analysis.groups);
     for (const auto& file : result_.files) {
         for (auto* combo : {includer_, header_}) combo->addItem(relativeName(file, root), pathText(file));
@@ -560,6 +597,7 @@ void MainWindow::showAnalysis(AnalysisResult analysis) {
     if (!files_->currentItem())
         for (QTreeWidgetItemIterator it(files_); *it; ++it)
             if ((*it)->data(0, Qt::UserRole).isValid()) { files_->setCurrentItem(*it); break; }
+    showingResult_ = false;
     updateSummary(); emit analysisFinished();
 }
 void MainWindow::filterFiles(const QString& text) {
@@ -575,14 +613,20 @@ void MainWindow::selectPath(const QString& path) {
 void MainWindow::updateSelection() {
     dependencies_->clear();
     const auto* row = files_->currentItem();
-    if (!row || !row->data(0, Qt::UserRole).isValid() || !dependencyGraph_) return;
+    if (!row || !dependencyGraph_) return;
+    if (!row->data(0, Qt::UserRole).isValid()) {
+        const auto folder = row->data(0, Qt::UserRole + 2).toString();
+        if (!folder.isEmpty()) showFolderDependencies(folder);
+        return;
+    }
     const auto file = nativePath(row->data(0, Qt::UserRole).toString());
-    selected_->setText(pathText(file.filename())); graph_->selectFile(file);
+    selectedFolder_.clear(); selectedTargets_ = {file};
+    selected_->setText(pathText(file.filename())); graph_->selectFile(file, !showingResult_);
     selectedPath_->setText(row->data(0, Qt::UserRole + 1).toString());
     auto* incoming = new QTreeWidgetItem(dependencies_, {tr("Зависимые файлы")});
     auto* outgoing = new QTreeWidgetItem(dependencies_, {tr("Включает напрямую")});
     for (const auto& dependent : dependencyGraph_->dependents(file)) {
-        auto* item = new QTreeWidgetItem(incoming, {pathText(dependent.filename())});
+        auto* item = new QTreeWidgetItem(incoming, {relativeName(dependent, pathText(displayedRoot_))});
         item->setData(0, Qt::UserRole, pathText(dependent));
         const bool direct = std::any_of(result_.edges.begin(), result_.edges.end(), [&](const auto& edge) {
             return edge.includer == dependent && edge.included == file;
@@ -595,7 +639,7 @@ void MainWindow::updateSelection() {
     }
     for (const auto& edge : result_.edges) {
         if (edge.includer != file) continue;
-        auto* item = new QTreeWidgetItem(outgoing, {pathText(edge.included.filename()), tr("стр. %1").arg(edge.line)});
+        auto* item = new QTreeWidgetItem(outgoing, {relativeName(edge.included, pathText(displayedRoot_)), tr("стр. %1").arg(edge.line)});
         language::setItemText(item, 1, "стр. %1", {QString::number(edge.line)});
         item->setData(0, Qt::UserRole, pathText(edge.included)); item->setToolTip(0, pathText(edge.included));
     }
@@ -664,25 +708,86 @@ void MainWindow::checkInclude() {
     if (showProposal) graph_->showProposedInclude(from, to, closesCycle);
     else graph_->showProposedInclude({}, {}, false);
 }
-// Highlights every edge lying on some include path from the clicked dependent to the selected file.
+// Select a collapsed graph folder without pretending it is a file.
+void MainWindow::selectFolder(const QString& folder) {
+    if (!dependencyGraph_) return;
+    QTreeWidgetItem* matching = nullptr;
+    for (QTreeWidgetItemIterator it(files_); *it; ++it)
+        if ((*it)->data(0, Qt::UserRole + 2).toString() == folder) { matching = *it; break; }
+    if (matching && files_->currentItem() != matching) {
+        search_->clear(); files_->setCurrentItem(matching); files_->scrollToItem(matching);
+    } else {
+        if (!matching) files_->setCurrentItem(nullptr);
+        showFolderDependencies(folder);
+    }
+}
+void MainWindow::updateFolderHeading() {
+    selected_->setText(selectedFolder_ == QStringLiteral(":root-files:") ? tr("Файлы в корне")
+        : relativeName(nativePath(selectedFolder_), pathText(displayedRoot_)) + QLatin1Char('/'));
+    selectedPath_->setText(tr("Папка · %1 файлов").arg(selectedTargets_.size()));
+}
+void MainWindow::showFolderDependencies(const QString& folder) {
+    dependencies_->clear(); selectedFolder_ = folder; selectedTargets_.clear();
+    auto members = graph_->folderMembers(folder);
+    if (members.isEmpty()) for (const auto& file : result_.files) {
+        const auto relative = file.lexically_relative(nativePath(folder));
+        if (!relative.empty() && *relative.begin() != "..") members << pathText(file);
+    }
+    for (const auto& member : members) selectedTargets_.insert(nativePath(member));
+    updateFolderHeading(); graph_->selectFolder(folder);
+    auto* incoming = new QTreeWidgetItem(dependencies_);
+    auto* outgoing = new QTreeWidgetItem(dependencies_);
+    const auto reached = dependentClosure(result_, selectedTargets_);
+    std::set<std::filesystem::path> direct, included;
+    std::map<std::filesystem::path, QStringList> includeDetails;
+    for (const auto& edge : result_.edges) {
+        if (selectedTargets_.contains(edge.included) && !selectedTargets_.contains(edge.includer)) direct.insert(edge.includer);
+        if (selectedTargets_.contains(edge.includer) && !selectedTargets_.contains(edge.included)) {
+            included.insert(edge.included);
+            includeDetails[edge.included] << pathText(edge.includer) + QStringLiteral(":%1 → ").arg(edge.line) + pathText(edge.included);
+        }
+    }
+    for (const auto& file : reached) if (!selectedTargets_.contains(file)) {
+        auto* item = new QTreeWidgetItem(incoming, {relativeName(file, pathText(displayedRoot_))});
+        item->setData(0, Qt::UserRole, pathText(file)); item->setToolTip(0, pathText(file));
+        language::setItemText(item, 1, direct.contains(file) ? "прямо" : "косвенно");
+    }
+    for (const auto& file : included) {
+        auto* item = new QTreeWidgetItem(outgoing, {relativeName(file, pathText(displayedRoot_))});
+        item->setData(0, Qt::UserRole, pathText(file)); item->setToolTip(0, includeDetails[file].join(QLatin1Char('\n')));
+    }
+    for (auto* group : {incoming, outgoing}) {
+        const int count = group->childCount();
+        language::setItemText(group, 0, group == incoming ? "Зависимые файлы · %1" : "Включает напрямую · %1", {QString::number(count)});
+        if (!count) language::setItemText(new QTreeWidgetItem(group), 0, group == incoming ? "Нет зависимых файлов" : "Нет подключений");
+        auto bold = group->font(0); bold.setBold(true); group->setFont(0, bold);
+        group->setFirstColumnSpanned(true); group->setFlags(Qt::ItemIsEnabled);
+    }
+    dependencies_->expandAll();
+    includer_->setCurrentIndex(-1);
+    if (tabs_->currentIndex() == 2) checkInclude();
+}
+// Highlight incoming paths or direct outgoing connections for the selected file/folder.
 void MainWindow::showChain(QTreeWidgetItem* dependent) {
     std::set<std::pair<QString, QString>> chain;
-    const auto* row = files_->currentItem();
-    if (dependent && dependent->parent() == dependencies_->topLevelItem(0)
-        && dependent->data(0, Qt::UserRole).isValid() && row && dependencyGraph_) {
-        const auto target = nativePath(row->data(0, Qt::UserRole).toString());
-        const auto upstream = dependencyGraph_->dependents(target);
-        std::set<std::filesystem::path> reachesTarget(upstream.begin(), upstream.end());
-        reachesTarget.insert(target);
-        std::vector<std::filesystem::path> queue{nativePath(dependent->data(0, Qt::UserRole).toString())};
-        std::set<std::filesystem::path> seen(queue.begin(), queue.end());
-        for (std::size_t i = 0; i < queue.size(); ++i) {
-            if (queue[i] == target) continue;
-            for (const auto& next : dependencyGraph_->includes(queue[i])) {
-                if (!reachesTarget.contains(next)) continue;
-                chain.emplace(pathText(queue[i]), pathText(next));
-                if (seen.insert(next).second) queue.push_back(next);
+    if (dependent && dependencyGraph_ && dependent->data(0, Qt::UserRole).isValid() && !selectedTargets_.empty()) {
+        const auto endpoint = nativePath(dependent->data(0, Qt::UserRole).toString());
+        if (dependent->parent() == dependencies_->topLevelItem(0)) {
+            const auto reachesTarget = dependentClosure(result_, selectedTargets_);
+            std::vector<std::filesystem::path> queue{endpoint};
+            std::set<std::filesystem::path> seen{endpoint};
+            for (std::size_t i = 0; i < queue.size(); ++i) {
+                if (selectedTargets_.contains(queue[i])) continue;
+                for (const auto& next : dependencyGraph_->includes(queue[i])) {
+                    if (!reachesTarget.contains(next)) continue;
+                    chain.emplace(pathText(queue[i]), pathText(next));
+                    if (seen.insert(next).second) queue.push_back(next);
+                }
             }
+        } else if (dependent->parent() == dependencies_->topLevelItem(1)) {
+            for (const auto& edge : result_.edges)
+                if (selectedTargets_.contains(edge.includer) && edge.included == endpoint)
+                    chain.emplace(pathText(edge.includer), pathText(endpoint));
         }
     }
     graph_->highlightChain(std::move(chain));
@@ -769,6 +874,9 @@ void MainWindow::retranslateUi() {
     analyze_->setText(analyze_->isEnabled() ? tr("Анализировать") : tr("Анализ…"));
     export_->setText(tr("Экспорт графа…"));
     fit_->setText(tr("Уместить граф"));
+    groupFolders_->setText(tr("Группировать по папкам"));
+    groupFolders_->setToolTip(tr("Двойной щелчок раскрывает папку. Правая кнопка — свернуть родительскую папку."));
+    collapseFolders_->setText(tr("Свернуть всё"));
     files_->setAccessibleName(tr("Файлы проекта"));
     search_->setPlaceholderText(tr("Найти файл…"));
     tabs_->setTabText(0, tr("Граф"));
@@ -784,7 +892,8 @@ void MainWindow::retranslateUi() {
     if (auto* toggle = findChild<QAbstractButton*>(QStringLiteral("themeToggle"))) toggle->setAccessibleName(tr("Тёмная тема"));
     diagnostics_->setHeaderLabels({tr("Уровень"), tr("Сообщение"), tr("Файл"), tr("Строка")});
     const auto* current = files_->currentItem();
-    if (!current || !current->data(0, Qt::UserRole).isValid()) selected_->setText(tr("Выберите файл"));
+    if (!selectedFolder_.isEmpty()) updateFolderHeading();
+    else if (!current || !current->data(0, Qt::UserRole).isValid()) selected_->setText(tr("Выберите файл"));
     for (auto* label : findChildren<QLabel*>()) {
         const auto source = label->property("translationSource");
         if (source.isValid()) label->setText(language::text(source.toString().toUtf8().constData()));

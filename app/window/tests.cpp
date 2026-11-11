@@ -8,6 +8,8 @@
 #include "path_utils.hpp"
 #include <headerscope/demo/fixture.hpp>
 #include <QAbstractButton>
+#include <QCheckBox>
+#include <QGraphicsPathItem>
 #include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -148,6 +150,227 @@ private slots:
         MainWindow next;
         QCOMPARE(next.findChild<QComboBox*>("languageSelector")->currentData().toString(), QStringLiteral("en"));
         QCOMPARE(next.findChild<QPushButton*>("analyzeButton")->text(), QStringLiteral("Analyze"));
+    }
+    void folderOverviewAggregatesAndExpands() {
+        const auto root = nativePath(QDir::tempPath()) / "HeaderScope-folder-test";
+        headerscope::ScanResult result;
+        result.status = headerscope::ScanStatus::complete;
+        result.files = {root / "app/main.cpp", root / "core/api.h", root / "core/detail.h",
+            root / "core/nested/types.h", root / "ui/widget.h", root / "orphan/isolated.h"};
+        result.edges = {{result.files[0], result.files[1], 1}, {result.files[0], result.files[2], 2},
+            {result.files[0], result.files[1], 3}, // Repeated directive is one file-pair link.
+            {result.files[4], result.files[1], 1}, {result.files[1], result.files[2], 1},
+            {result.files[2], result.files[3], 1}};
+        GraphPlaceholder graph;
+        graph.resize(900, 600); graph.show();
+        graph.setResult(result, root);
+        const auto nodes = [&] {
+            QStringList values;
+            for (auto* item : graph.scene()->items())
+                if (qgraphicsitem_cast<QGraphicsPathItem*>(item)) values << item->data(0).toString();
+            values.sort(); return values;
+        };
+        QCOMPARE(nodes().size(), 4);
+        QVERIFY(nodes().contains(pathText(root / "orphan")));
+        int aggregated = 0, loops = 0;
+        for (auto* item : graph.scene()->items()) {
+            if (auto* line = qgraphicsitem_cast<QGraphicsLineItem*>(item)) {
+                if (line->data(2).toString() == pathText(root / "app")) {
+                    QCOMPARE(line->data(3).toString(), pathText(root / "core"));
+                    QCOMPARE(line->data(10).toInt(), 2); ++aggregated;
+                }
+            }
+            loops += qgraphicsitem_cast<QGraphicsEllipseItem*>(item) != nullptr;
+        }
+        QCOMPARE(aggregated, 1); QCOMPARE(loops, 0); // Hidden internal edges are not fake self-cycles.
+        graph.expandFolder(pathText(root / "core"));
+        QCOMPARE(nodes().size(), 6);
+        QVERIFY(nodes().contains(pathText(root / "core/nested")));
+        QVERIFY(nodes().contains(pathText(root / "core/api.h")));
+        graph.expandFolder(pathText(root / "core/nested"));
+        QVERIFY(nodes().contains(pathText(root / "core/nested/types.h")));
+        graph.collapseFolder(pathText(root / "core"));
+        QCOMPARE(nodes().size(), 4);
+        graph.setGrouped(false);
+        QCOMPARE(nodes().size(), 6);
+        for (const auto& file : result.files) QVERIFY(nodes().contains(pathText(file)));
+        graph.setGrouped(true);
+        QCOMPARE(nodes().size(), 4);
+    }
+    void folderDoubleClickAndSelectionRevealFiles() {
+        const auto root = nativePath(QDir::tempPath()) / "HeaderScope-folder-click";
+        auto result = chain();
+        result.files = {root / "src/main.cpp", root / "inc/types.h"};
+        result.edges = {{result.files[0], result.files[1], 1}};
+        GraphPlaceholder graph;
+        graph.resize(800, 500); graph.show(); graph.setResult(result, root);
+        QSignalSpy activation(&graph, &GraphPlaceholder::fileActivated);
+        QPoint click;
+        for (auto* item : graph.scene()->items()) if (item->data(0).toString() == pathText(root / "inc"))
+            click = graph.mapFromScene(item->scenePos());
+        QTest::mouseDClick(graph.viewport(), Qt::LeftButton, Qt::NoModifier, click);
+        QCOMPARE(activation.count(), 0); // A folder is never emitted as a file.
+        bool revealed = false;
+        for (auto* item : graph.scene()->items()) revealed |= item->data(0).toString() == pathText(result.files[1]);
+        QVERIFY(revealed);
+        graph.collapseFolders();
+        graph.selectFile(result.files[0]);
+        bool selected = false;
+        for (auto* item : graph.scene()->items()) selected |= item->data(0).toString() == pathText(result.files[0]);
+        QVERIFY(selected);
+        graph.showProposedInclude(pathText(result.files[1]), pathText(result.files[0]), true);
+        int proposed = 0;
+        for (auto* item : graph.scene()->items()) proposed += item->data(4).toBool();
+        QCOMPARE(proposed, 2); // Both endpoints are automatically revealed.
+    }
+    void largeProjectStartsWithBoundedOverview() {
+        const auto root = nativePath(QDir::tempPath()) / "HeaderScope-large";
+        headerscope::ScanResult result;
+        result.status = headerscope::ScanStatus::complete;
+        for (int module = 0; module < 25; ++module)
+            for (int file = 0; file < 200; ++file)
+                result.files.push_back(root / ("module" + std::to_string(module)) / ("file" + std::to_string(file) + ".h"));
+        for (std::size_t i = 0; i < result.files.size(); ++i)
+            result.edges.push_back({result.files[i], result.files[(i + 1) % result.files.size()], 1});
+        GraphPlaceholder graph;
+        graph.setResult(result, root);
+        int nodes = 0;
+        for (auto* item : graph.scene()->items()) nodes += qgraphicsitem_cast<QGraphicsPathItem*>(item) != nullptr;
+        QCOMPARE(nodes, 25);
+        QVERIFY(graph.scene()->items().size() < 200);
+        const auto preview = qEnvironmentVariable("HEADERSCOPE_GRAPH_PREVIEW");
+        if (!preview.isEmpty()) {
+            graph.resize(1100, 700); graph.show(); graph.fitGraph();
+            QCoreApplication::processEvents();
+            QVERIFY(graph.grab().save(preview + QStringLiteral("-overview.png")));
+            graph.expandFolder(pathText(root / "module0"));
+            QCoreApplication::processEvents();
+            QVERIFY(graph.grab().save(preview + QStringLiteral("-expanded.png")));
+        }
+        // A new analysis clears expansion state and stale files.
+        graph.setResult(chain());
+        nodes = 0;
+        for (auto* item : graph.scene()->items()) nodes += qgraphicsitem_cast<QGraphicsPathItem*>(item) != nullptr;
+        QCOMPARE(nodes, 3);
+    }
+    void rootFilesAndExternalFoldersArePreserved() {
+        const auto root = nativePath(QDir::tempPath()) / "HeaderScope-flat";
+        headerscope::ScanResult result;
+        result.status = headerscope::ScanStatus::partial;
+        for (int i = 0; i < 30; ++i) result.files.push_back(root / ("file" + std::to_string(i) + ".h"));
+        const auto external = root.parent_path() / "external/other.h";
+        result.edges.push_back({result.files.front(), external, 1}); // Missing from files, present in an edge.
+        GraphPlaceholder graph;
+        graph.setResult(result, root);
+        int nodes = 0;
+        for (auto* item : graph.scene()->items()) nodes += qgraphicsitem_cast<QGraphicsPathItem*>(item) != nullptr;
+        QCOMPARE(nodes, 2);
+        graph.setGrouped(false);
+        nodes = 0;
+        for (auto* item : graph.scene()->items()) nodes += qgraphicsitem_cast<QGraphicsPathItem*>(item) != nullptr;
+        QCOMPARE(nodes, 31);
+    }
+    void folderControlsKeepOverviewAndTranslate() {
+        QTemporaryDir project;
+        QVERIFY(project.isValid());
+        const auto root = nativePath(project.path());
+        headerscope::ScanResult result;
+        result.status = headerscope::ScanStatus::complete;
+        result.files = {root / "src/main.cpp", root / "include/api.h"};
+        result.edges = {{result.files[0], result.files[1], 1}};
+        MainWindow window;
+        window.findChild<QLineEdit*>("projectPath")->setText(project.path());
+        window.showResult(result);
+        auto* grouped = window.findChild<QCheckBox*>("groupFolders");
+        auto* collapse = window.findChild<QPushButton*>("collapseFolders");
+        QVERIFY(grouped && collapse && grouped->isChecked());
+        auto* graph = window.findChild<GraphPlaceholder*>();
+        int folders = 0;
+        for (auto* item : graph->scene()->items()) folders += item->data(5).toBool();
+        QCOMPARE(folders, 2); // Initial automatic file selection does not expand a folder.
+        window.findChild<QComboBox*>("languageSelector")->setCurrentIndex(1);
+        QCoreApplication::processEvents();
+        QCOMPARE(grouped->text(), QStringLiteral("Group by folder"));
+        QCOMPARE(collapse->text(), QStringLiteral("Collapse all"));
+        bool english = false;
+        for (auto* item : graph->scene()->items()) if (item->data(5).toBool())
+            english |= item->toolTip().contains(QStringLiteral("Files: 1"));
+        QVERIFY(english);
+        const auto preview = qEnvironmentVariable("HEADERSCOPE_GRAPH_PREVIEW");
+        if (!preview.isEmpty()) {
+            window.show(); QCoreApplication::processEvents();
+            QVERIFY(window.grab().save(preview + QStringLiteral("-window.png")));
+        }
+        grouped->setChecked(false);
+        collapse->click();
+        QVERIFY(grouped->isChecked());
+        folders = 0;
+        for (auto* item : graph->scene()->items()) folders += item->data(5).toBool();
+        QCOMPARE(folders, 2);
+    }
+    void outgoingDependencyIsHighlighted() {
+        MainWindow window;
+        window.showResult(chain());
+        auto* files = window.findChild<QTreeWidget*>("filesTree");
+        files->setCurrentItem(files->findItems(QStringLiteral("a.h"), Qt::MatchExactly | Qt::MatchRecursive).front());
+        auto* dependencies = window.findChild<QTreeWidget*>("dependenciesTree");
+        auto* outgoing = dependencies->topLevelItem(1)->child(0);
+        dependencies->setCurrentItem(outgoing);
+        const auto* line = edgeLine(window, "a.h", "b.h");
+        QVERIFY(line);
+        QCOMPARE(line->pen().width(), 3);
+    }
+    void folderDependenciesAndGraphSelection() {
+        QTemporaryDir project;
+        QVERIFY(project.isValid());
+        const auto root = nativePath(project.path());
+        headerscope::ScanResult result;
+        result.status = headerscope::ScanStatus::complete;
+        result.files = {root / "app/main.cpp", root / "core/api.h", root / "core/detail.h",
+            root / "shared/types.h", root / "ui/view.cpp", root / "tools/worker.cpp"};
+        result.edges = {{result.files[0], result.files[1], 1}, {result.files[1], result.files[2], 1},
+            {result.files[2], result.files[3], 1}, {result.files[4], result.files[1], 1},
+            {result.files[5], result.files[0], 1}};
+        MainWindow window;
+        window.findChild<QLineEdit*>("projectPath")->setText(project.path());
+        window.show(); window.showResult(result);
+        auto* graph = window.findChild<GraphPlaceholder*>();
+        QCoreApplication::processEvents(); graph->fitGraph();
+        QPoint folderPoint;
+        bool found = false;
+        for (auto* item : graph->scene()->items()) if (item->data(0).toString() == pathText(root / "core")) {
+            folderPoint = graph->mapFromScene(item->scenePos()); found = true;
+        }
+        QVERIFY(found);
+        QTest::mouseClick(graph->viewport(), Qt::LeftButton, Qt::NoModifier, folderPoint);
+        QCOMPARE(window.findChild<QLabel*>("selectedFile")->text(), QStringLiteral("core/"));
+        QCOMPARE(window.findChild<QLabel*>("selectedPath")->text(), QStringLiteral("Папка · 2 файлов"));
+        auto* dependencies = window.findChild<QTreeWidget*>("dependenciesTree");
+        auto* incoming = dependencies->topLevelItem(0);
+        auto* outgoing = dependencies->topLevelItem(1);
+        QCOMPARE(incoming->childCount(), 3);
+        QCOMPARE(outgoing->childCount(), 1);
+        QCOMPARE(outgoing->child(0)->text(0), QStringLiteral("shared/types.h"));
+        for (int i = 0; i < incoming->childCount(); ++i) {
+            QVERIFY(!incoming->child(i)->text(0).startsWith(QStringLiteral("core/")));
+            if (incoming->child(i)->text(0) == QStringLiteral("tools/worker.cpp"))
+                QCOMPARE(incoming->child(i)->text(1), QStringLiteral("косвенно"));
+            if (incoming->child(i)->text(0) == QStringLiteral("app/main.cpp")) dependencies->setCurrentItem(incoming->child(i));
+        }
+        const auto* entry = edgeLine(window, "main.cpp", "api.h");
+        const auto* internal = edgeLine(window, "api.h", "detail.h");
+        QVERIFY(entry && internal);
+        QCOMPARE(entry->pen().width(), 3);
+        QCOMPARE(internal->pen().width(), 2); // Incoming paths stop at the folder boundary.
+        dependencies->setCurrentItem(outgoing->child(0));
+        const auto* exit = edgeLine(window, "detail.h", "types.h");
+        QVERIFY(exit);
+        QCOMPARE(exit->pen().width(), 3);
+        window.findChild<QComboBox*>("languageSelector")->setCurrentIndex(1);
+        QCOMPARE(window.findChild<QLabel*>("selectedPath")->text(), QStringLiteral("Folder · 2 files"));
+        auto* files = window.findChild<QTreeWidget*>("filesTree");
+        files->setCurrentItem(files->findItems(QStringLiteral("view.cpp"), Qt::MatchExactly | Qt::MatchRecursive).front());
+        QCOMPARE(dependencies->topLevelItem(0)->text(0), QStringLiteral("Dependent files · 0"));
     }
     void busyBlocksSecondRun() {
         MainWindow window;
