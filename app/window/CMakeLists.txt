@@ -24,3 +24,14 @@ set_target_properties(headerscope_app PROPERTIES
     MACOSX_BUNDLE_BUNDLE_NAME HeaderScope
     MACOSX_BUNDLE_GUI_IDENTIFIER io.github.deforc.headerscope
 )
+
+install(TARGETS headerscope_app BUNDLE DESTINATION . RUNTIME DESTINATION .)
+if(HEADERSCOPE_BUILD_SCANNER)
+    if(APPLE)
+        set(clang_resources HeaderScope.app/Contents/Resources/clang)
+    else()
+        set(clang_resources clang)
+    endif()
+    install(DIRECTORY "${HEADERSCOPE_CLANG_RESOURCE_INCLUDE}/"
+        DESTINATION "${clang_resources}/include")
+endif()
