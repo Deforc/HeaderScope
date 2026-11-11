@@ -48,8 +48,22 @@ cmake --build build-demo
 ```sh
 cmake -S . -B build-inspect -DHEADERSCOPE_BUILD_APP=OFF -DHEADERSCOPE_BUILD_SCANNER=ON
 cmake --build build-inspect
-build-inspect/demo/inspect/headerscope_inspect build-demo/compile_commands.json demo/include-chain/b.h
+build-inspect/demo/inspect/headerscope_inspect --help
+build-inspect/demo/inspect/headerscope_inspect --version
+build-inspect/demo/inspect/headerscope_inspect build-demo/compile_commands.json --root demo/include-chain
+build-inspect/demo/inspect/headerscope_inspect build-demo/compile_commands.json --root demo/include-chain --cycles-only
 ```
+
+Полный отчёт группирует прямые подключения по файлу и показывает номера строк.
+Повторные подключения одного заголовка перечисляются в одной строке отчёта.
+Отдельные секции показывают итог анализа, файлы без прямых подключений и циклы.
+Пути выводятся относительно `--root` или текущего каталога.
+
+Передайте путь к файлу после базы команд, чтобы добавить секцию кратчайших
+цепочек от зависимых файлов. Флаг `--cycles-only` выводит циклы без списка
+подключений. Вместе с `--compare` он выводит только новые или расширившиеся
+циклические группы. Этот флаг используется отдельно от `--rank` и запроса
+зависимостей для одного файла.
 
 Проверки сборщика: `ctest --test-dir build-inspect --output-on-failure`.
 
