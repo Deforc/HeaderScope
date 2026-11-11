@@ -92,6 +92,7 @@ private slots:
         selector->setCurrentIndex(1);
         QCoreApplication::processEvents();
         QCOMPARE(window.findChild<QPushButton*>("analyzeButton")->text(), QStringLiteral("Analyze"));
+        QCOMPARE(window.findChild<QPushButton*>("exportButton")->text(), QStringLiteral("Export graph…"));
         QCOMPARE(window.findChild<QTabBar*>("viewTabs")->tabText(1), QStringLiteral("Cycles"));
         QCOMPARE(dependencies->topLevelItem(0)->text(0), QStringLiteral("Dependent files · 2"));
         QVERIFY(cycles->topLevelItem(0)->text(0).startsWith(QStringLiteral("Group 1")));
@@ -103,6 +104,7 @@ private slots:
         selector->setCurrentIndex(0);
         QCoreApplication::processEvents();
         QCOMPARE(window.findChild<QPushButton*>("analyzeButton")->text(), QStringLiteral("Анализировать"));
+        QCOMPARE(window.findChild<QPushButton*>("exportButton")->text(), QStringLiteral("Экспорт графа…"));
         QCOMPARE(dependencies->topLevelItem(0)->text(0), QStringLiteral("Зависимые файлы · 2"));
         QCOMPARE(files->currentItem(), selected);
     }
@@ -167,6 +169,7 @@ private slots:
 
         auto* exportButton = window.findChild<QPushButton*>("exportButton");
         QVERIFY(exportButton->isEnabled());
+        window.findChild<QComboBox*>("languageSelector")->setCurrentIndex(1);
         const auto previous = QCoreApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
         QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
         QTimer timeout;
@@ -175,8 +178,10 @@ private slots:
             if (auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget())) dialog->reject();
         });
         timeout.start(5000);
+        QString dialogTitle;
         QTimer::singleShot(0, &window, [&] {
             if (auto* dialog = window.findChild<QFileDialog*>()) {
+                dialogTitle = dialog->windowTitle();
                 dialog->setDirectory(temp.path());
                 dialog->selectFile(QStringLiteral("graph"));
                 static_cast<QDialog*>(dialog)->accept();
@@ -185,6 +190,8 @@ private slots:
         exportButton->click();
         QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs, previous);
 
+        QCOMPARE(dialogTitle, QStringLiteral("Export graph"));
+        QVERIFY(window.statusBar()->currentMessage().startsWith(QStringLiteral("Graph exported: ")));
         QFile exported(temp.filePath(QStringLiteral("graph.json")));
         QVERIFY(exported.open(QIODevice::ReadOnly));
         const auto graph = QJsonDocument::fromJson(exported.readAll()).object();

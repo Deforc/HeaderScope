@@ -627,6 +627,7 @@ void MainWindow::retranslateUi() {
     project_->setAccessibleName(tr("Путь к проекту или базе команд"));
     browse_->setText(tr("Папка…"));
     analyze_->setText(analyze_->isEnabled() ? tr("Анализировать") : tr("Анализ…"));
+    export_->setText(tr("Экспорт графа…"));
     fit_->setText(tr("Уместить граф"));
     files_->setAccessibleName(tr("Файлы проекта"));
     search_->setPlaceholderText(tr("Найти файл…"));
