@@ -1,6 +1,7 @@
 #include "graph_placeholder.hpp"
 #include "path_utils.hpp"
 #include "theme.hpp"
+#include <QEvent>
 #include <QGraphicsItem>
 #include <QGraphicsScene>
 #include <QLinearGradient>
@@ -50,7 +51,7 @@ GraphPlaceholder::GraphPlaceholder(QWidget* parent) : QGraphicsView(parent), sce
     setTransformationAnchor(AnchorUnderMouse);
     setMinimumSize(280, 220);
     setAccessibleName(tr("Граф подключений"));
-    scene_->addText(tr("Запустите анализ, чтобы увидеть связи"));
+    scene_->addText(tr("Запустите анализ, чтобы увидеть связи"))->setData(9, QStringLiteral("Запустите анализ, чтобы увидеть связи"));
     recolor();
     connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, &GraphPlaceholder::recolor);
 }
@@ -66,7 +67,10 @@ void GraphPlaceholder::setResult(const headerscope::ScanResult& result) {
         files.insert(edge.includer);
         files.insert(edge.included);
     }
-    if (files.empty()) { scene_->addText(tr("Нет файлов для отображения")); recolor(); return; }
+    if (files.empty()) {
+        scene_->addText(tr("Нет файлов для отображения"))->setData(9, QStringLiteral("Нет файлов для отображения"));
+        recolor(); return;
+    }
     const int columns = std::max(1, int(std::ceil(std::sqrt(double(files.size())))));
     std::map<std::filesystem::path, QPointF> positions;
     int index = 0;
@@ -113,6 +117,15 @@ void GraphPlaceholder::selectFile(const std::filesystem::path& file) {
     selected_ = pathText(file);
     chain_.clear(); chainFiles_.clear();
     recolor();
+}
+void GraphPlaceholder::changeEvent(QEvent* event) {
+    QGraphicsView::changeEvent(event);
+    if (event->type() != QEvent::LanguageChange) return;
+    setAccessibleName(tr("Граф подключений"));
+    for (auto* item : scene_->items()) {
+        if (auto* label = qgraphicsitem_cast<QGraphicsTextItem*>(item); label && label->data(9).isValid())
+            label->setPlainText(tr(label->data(9).toString().toUtf8().constData()));
+    }
 }
 void GraphPlaceholder::highlightChain(std::set<Edge> edges) {
     chain_ = std::move(edges);

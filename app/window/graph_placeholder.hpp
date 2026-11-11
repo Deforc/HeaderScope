@@ -29,6 +29,7 @@ public:
 signals:
     void fileActivated(const QString& path);
 protected:
+    void changeEvent(QEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
 private:

@@ -1,0 +1,93 @@
+name: Build release packages
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS (Apple Silicon)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.3'
+          cache: true
+      - name: Install LLVM
+        run: brew install llvm@18
+      - name: Configure, build and test
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DHEADERSCOPE_BUILD_SCANNER=ON \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$(brew --prefix llvm@18)"
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+      - name: Package application
+        run: |
+          cmake --install build --prefix "$PWD/dist"
+          app="$PWD/dist/HeaderScope.app"
+          macdeployqt "$app" -no-strip -codesign=- -libpath="$QT_ROOT_DIR/lib"
+          test -f "$app/Contents/Resources/clang/include/stddef.h"
+          test -f "$app/Contents/PlugIns/platforms/libqcocoa.dylib"
+          codesign --verify --deep --strict "$app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" dist/HeaderScope-macos-arm64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HeaderScope-macos-arm64
+          path: dist/HeaderScope-macos-arm64.zip
+          compression-level: 0
+          if-no-files-found: error
+
+  windows:
+    name: Windows (x64)
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          pacboy: >-
+            clang:p clang-tools-extra:p llvm:p lld:p
+            cmake:p ninja:p python:p qt6-base:p
+      - name: Configure, build and test
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DHEADERSCOPE_BUILD_SCANNER=ON \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_PREFIX_PATH="$(cygpath -am "$MINGW_PREFIX")"
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+      - name: Package application
+        run: |
+          set -euo pipefail
+          stage="$PWD/dist/HeaderScope"
+          cmake --install build --prefix "$stage"
+          test -f "$stage/clang/include/stddef.h"
+          windeployqt --release --no-libraries --no-compiler-runtime --no-translations \
+            --no-system-d3d-compiler --no-opengl-sw "$stage/HeaderScope.exe"
+          test -f "$stage/platforms/qwindows.dll"
+          cmake -D "stage=$(cygpath -am "$stage")" \
+            -D "runtime_bin=$(cygpath -am "$MINGW_PREFIX/bin")" \
+            -P .github/scripts/bundle-windows-runtime.cmake
+          cd dist
+          cmake -E tar cf HeaderScope-windows-x64.zip --format=zip HeaderScope
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HeaderScope-windows-x64
+          path: dist/HeaderScope-windows-x64.zip
+          compression-level: 0
+          if-no-files-found: error

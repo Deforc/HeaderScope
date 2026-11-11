@@ -2,6 +2,10 @@
 #include "graph_placeholder.hpp"
 #include "path_utils.hpp"
 #include "theme.hpp"
+#include "language.hpp"
+#include <QComboBox>
+#include <QEvent>
+#include <QSettings>
 #include <headerscope/export.hpp>
 #if HEADERSCOPE_HAS_SCANNER
 #include <headerscope/scanner.hpp>
@@ -168,11 +172,12 @@ bool filterItem(QTreeWidgetItem* item, const QString& text) {
     item->setHidden(!visible);
     return visible;
 }
-QWidget* panel(const QString& title, QWidget* content, QWidget* extra = nullptr) {
+QWidget* panel(const char* title, QWidget* content, QWidget* extra = nullptr) {
     auto* widget = new QWidget;
     widget->setObjectName(QStringLiteral("panel"));
     auto* layout = new QVBoxLayout(widget);
-    auto* label = new QLabel(title);
+    auto* label = new QLabel(language::text(title));
+    label->setProperty("translationSource", QString::fromUtf8(title));
     label->setObjectName(QStringLiteral("panelTitle"));
     layout->addWidget(label);
     if (extra) layout->addWidget(extra);
@@ -221,10 +226,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* layout = new QVBoxLayout(central);
     layout->setContentsMargins(18, 18, 18, 12);
     layout->setSpacing(12);
-    auto* heading = new QLabel(tr("HeaderScope · зависимости C/C++"));
-    QFont titleFont = heading->font(); titleFont.setPointSize(18); titleFont.setBold(true);
-    heading->setFont(titleFont);
-    layout->addWidget(heading);
+    heading_ = new QLabel(tr("HeaderScope · зависимости C/C++"));
+    QFont titleFont = heading_->font(); titleFont.setPointSize(18); titleFont.setBold(true);
+    heading_->setFont(titleFont);
+    auto* titleRow = new QHBoxLayout;
+    titleRow->addWidget(heading_); titleRow->addStretch();
+    language_ = new QComboBox;
+    language_->setObjectName(QStringLiteral("languageSelector"));
+    language_->addItem(QStringLiteral("Русский"), QStringLiteral("ru"));
+    language_->addItem(QStringLiteral("English"), QStringLiteral("en"));
+    titleRow->addWidget(language_);
+    layout->addLayout(titleRow);
 
     auto* controls = new QHBoxLayout;
     project_ = new QLineEdit;
@@ -243,8 +255,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     export_ = new QPushButton(tr("Экспорт графа…"));
     export_->setObjectName(QStringLiteral("exportButton"));
     export_->setEnabled(false);
-    auto* fit = new QPushButton(tr("Уместить граф"));
-    actions->addWidget(analyze_); actions->addWidget(export_); actions->addStretch(); actions->addWidget(fit);
+    fit_ = new QPushButton(tr("Уместить граф"));
+    actions->addWidget(analyze_); actions->addWidget(export_); actions->addStretch(); actions->addWidget(fit_);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
     // Overriding the scheme re-emits colorSchemeChanged, which already restyles the window and graph.
     auto* themeToggle = new ThemeSwitch;
@@ -259,7 +271,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         hints->setColorScheme(dark ? Qt::ColorScheme::Dark : Qt::ColorScheme::Light);
     });
     actions->addSpacing(12);
-    actions->addWidget(new QLabel(tr("Тёмная тема")));
+    auto* themeLabel = new QLabel(tr("Тёмная тема"));
+    themeLabel->setObjectName(QStringLiteral("themeLabel"));
+    themeLabel->setProperty("translationSource", QStringLiteral("Тёмная тема"));
+    actions->addWidget(themeLabel);
     actions->addWidget(themeToggle);
 #endif
     layout->addLayout(actions);
@@ -275,13 +290,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     search_ = new QLineEdit;
     search_->setObjectName(QStringLiteral("fileSearch"));
     search_->setPlaceholderText(tr("Найти файл…")); search_->setClearButtonEnabled(true);
-    horizontal->addWidget(panel(tr("ФАЙЛЫ"), files_, search_));
+    horizontal->addWidget(panel("ФАЙЛЫ", files_, search_));
     graph_ = new GraphPlaceholder;
     tabs_ = new QTabBar;
     tabs_->setObjectName(QStringLiteral("viewTabs"));
     tabs_->setDrawBase(false); tabs_->setExpanding(false);
     tabs_->addTab(tr("Граф")); tabs_->addTab(tr("Циклы")); tabs_->addTab(tr("Проверка #include"));
-    auto* center = panel(tr("A → B означает: A подключает B"), graph_);
+    auto* center = panel("A → B означает: A подключает B", graph_);
     static_cast<QVBoxLayout*>(center->layout())->insertWidget(0, tabs_, 0, Qt::AlignLeft);
     horizontal->addWidget(center);
 
@@ -340,9 +355,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // The right column describes whatever the tab above the graph shows.
     details_ = new QStackedWidget;
     details_->setObjectName(QStringLiteral("details"));
-    details_->addWidget(panel(tr("ЗАВИСИМОСТИ"), dependencies_, header));
-    details_->addWidget(panel(tr("ЦИКЛИЧЕСКИЕ ЗАВИСИМОСТИ"), cycles_, allCycles_));
-    details_->addWidget(panel(tr("ПРОВЕРКА НОВОГО #INCLUDE"), check));
+    details_->addWidget(panel("ЗАВИСИМОСТИ", dependencies_, header));
+    details_->addWidget(panel("ЦИКЛИЧЕСКИЕ ЗАВИСИМОСТИ", cycles_, allCycles_));
+    details_->addWidget(panel("ПРОВЕРКА НОВОГО #INCLUDE", check));
     horizontal->addWidget(details_);
     horizontal->setStretchFactor(0, 1); horizontal->setStretchFactor(1, 3); horizontal->setStretchFactor(2, 2);
     horizontal->setSizes({220, 580, 360}); horizontal->setChildrenCollapsible(false);
@@ -354,7 +369,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     diagnostics_->setColumnWidth(0, 110); diagnostics_->setColumnWidth(2, 260);
     diagnostics_->setRootIsDecorated(false);
     auto* vertical = new QSplitter(Qt::Vertical);
-    vertical->addWidget(horizontal); vertical->addWidget(panel(tr("ДИАГНОСТИКА АНАЛИЗА"), diagnostics_));
+    vertical->addWidget(horizontal); vertical->addWidget(panel("ДИАГНОСТИКА АНАЛИЗА", diagnostics_));
     vertical->setSizes({490, 160}); vertical->setStretchFactor(0, 1);
     layout->addWidget(vertical, 1); setCentralWidget(central);
     progress_ = new QProgressBar;
@@ -370,7 +385,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(&watcher_, &QFutureWatcher<AnalysisResult>::finished, this, &MainWindow::finishAnalysis);
     connect(files_, &QTreeWidget::currentItemChanged, this, &MainWindow::updateSelection);
     connect(search_, &QLineEdit::textChanged, this, &MainWindow::filterFiles);
-    connect(fit, &QPushButton::clicked, graph_, &GraphPlaceholder::fitGraph);
+    connect(fit_, &QPushButton::clicked, graph_, &GraphPlaceholder::fitGraph);
     connect(graph_, &GraphPlaceholder::fileActivated, this, &MainWindow::selectPath);
     connect(dependencies_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) {
         if (tabs_->currentIndex() == 0) showChain(item);
@@ -390,6 +405,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         if (item->data(0, Qt::UserRole).isValid()) selectPath(item->data(0, Qt::UserRole).toString());
     };
     for (auto* tree : {dependencies_, diagnostics_}) connect(tree, &QTreeWidget::itemActivated, this, activate);
+    connect(language_, &QComboBox::currentIndexChanged, this, [this](int index) {
+        const QString code = language_->itemData(index).toString();
+        QSettings().setValue(QStringLiteral("ui/language"), code);
+        language::setEnglish(code == QStringLiteral("en"));
+        retranslateUi();
+    });
+    const QString code = QSettings().value(QStringLiteral("ui/language"), QStringLiteral("ru")).toString();
+    language_->setCurrentIndex(code == QStringLiteral("en") ? 1 : 0);
+    language::setEnglish(code == QStringLiteral("en"));
+    retranslateUi();
 }
 MainWindow::~MainWindow() = default;
 
@@ -442,6 +467,7 @@ void MainWindow::runAnalysis() {
     scanInput_ = input;
     setBusy(true);
     // Clear the old view so a failed scan cannot leave a stale graph on screen.
+    hasResult_ = false; groupCount_ = 0;
     result_ = {}; dependencyGraph_.reset(); files_->clear(); dependencies_->clear(); diagnostics_->clear(); cycles_->clear();
     updateCycleFocus();
     selected_->setText(tr("Выберите файл")); selectedPath_->clear(); tabs_->setTabText(1, tr("Циклы"));
@@ -452,20 +478,20 @@ void MainWindow::runAnalysis() {
     watcher_.setFuture(QtConcurrent::run([input]() -> AnalysisResult {
         const auto failed = [](const QString& message) { return AnalysisResult{failure(message), {}, {}}; };
         try {
-            if (input.isEmpty()) return failed(tr("Укажите папку проекта или compile_commands.json."));
+            if (input.isEmpty()) return failed(QString::fromUtf8("Укажите папку проекта или compile_commands.json."));
             QFileInfo info(input);
-            if (!info.exists()) return failed(tr("Указанный путь не существует: %1").arg(input));
+            if (!info.exists()) return failed(QString::fromUtf8("Указанный путь не существует: %1").arg(input));
             QString database = info.isDir() ? QDir(input).filePath(QStringLiteral("compile_commands.json")) : info.absoluteFilePath();
             if (!QFileInfo(database).isFile())
-                return failed(tr("Не найден compile_commands.json. Выберите его в каталоге сборки кнопкой выше."));
+                return failed(QString::fromUtf8("Не найден compile_commands.json. Выберите его в каталоге сборки кнопкой выше."));
 #if HEADERSCOPE_HAS_SCANNER
             return prepareAnalysis(headerscope::scanIncludes(nativePath(database)));
 #else
-            return failed(tr("Сборщик Clang не включён. Соберите с HEADERSCOPE_BUILD_SCANNER=ON."));
+            return failed(QString::fromUtf8("Сборщик Clang не включён. Соберите с HEADERSCOPE_BUILD_SCANNER=ON."));
 #endif
         } catch (const std::exception& error) {
-            return failed(tr("Ошибка анализа: %1").arg(QString::fromUtf8(error.what())));
-        } catch (...) { return failed(tr("Неизвестная ошибка анализа.")); }
+            return failed(QString::fromUtf8("Ошибка анализа: %1").arg(QString::fromUtf8(error.what())));
+        } catch (...) { return failed(QString::fromUtf8("Неизвестная ошибка анализа.")); }
     }));
 }
 void MainWindow::finishAnalysis() {
@@ -487,6 +513,7 @@ MainWindow::AnalysisResult MainWindow::prepareAnalysis(headerscope::ScanResult s
     return analysis;
 }
 void MainWindow::showAnalysis(AnalysisResult analysis) {
+    hasResult_ = true; groupCount_ = analysis.groups.size();
     result_ = std::move(analysis.scan);
     // Normalize the file list at the UI boundary, including edge endpoints.
     std::set<std::filesystem::path> unique(result_.files.begin(), result_.files.end());
@@ -497,14 +524,18 @@ void MainWindow::showAnalysis(AnalysisResult analysis) {
             ? tr("Ошибка") : tr("Предупреждение"), QString::fromUtf8(diagnostic.message.c_str()),
             diagnostic.file ? pathText(*diagnostic.file) : QString(),
             diagnostic.line ? QString::number(*diagnostic.line) : QString()});
+        language::setItemText(row, 0, diagnostic.severity == headerscope::DiagnosticSeverity::error ? "Ошибка" : "Предупреждение");
+        row->setData(1, Qt::UserRole + 42, QString::fromUtf8(diagnostic.message.c_str()));
+        row->setText(1, language::diagnosticText(QString::fromUtf8(diagnostic.message.c_str())));
         if (diagnostic.file) row->setData(0, Qt::UserRole, pathText(*diagnostic.file));
         row->setForeground(0, QColor(diagnostic.severity == headerscope::DiagnosticSeverity::error ? "#ef4444" : "#d97706"));
         row->setToolTip(1, row->text(1)); row->setToolTip(2, row->text(2));
     }
     if (result_.status == headerscope::ScanStatus::failed) {
-        export_->setEnabled(false);
-        summary_->setText(tr("Анализ не выполнен. Подробности в диагностике."));
-        statusBar()->showMessage(tr("Ошибка анализа")); emit analysisFinished(); return;
+      export_->setEnabled(false);
+      updateSummary();
+      emit analysisFinished();
+      return;
     }
     dependencyGraph_ = std::move(analysis.graph);
     const QFileInfo input(scanInput_);
@@ -529,11 +560,7 @@ void MainWindow::showAnalysis(AnalysisResult analysis) {
     if (!files_->currentItem())
         for (QTreeWidgetItemIterator it(files_); *it; ++it)
             if ((*it)->data(0, Qt::UserRole).isValid()) { files_->setCurrentItem(*it); break; }
-    const QString status = result_.status == headerscope::ScanStatus::partial ? tr("Частичный анализ") : tr("Анализ завершён");
-    summary_->setText(tr("%1 · %2 файлов · %3 директив #include · %4 циклических групп · %5 сообщений")
-        .arg(status).arg(result_.files.size()).arg(result_.edges.size())
-        .arg(analysis.groups.size()).arg(result_.diagnostics.size()));
-    statusBar()->showMessage(status); emit analysisFinished();
+    updateSummary(); emit analysisFinished();
 }
 void MainWindow::filterFiles(const QString& text) {
     for (int i = 0; i < files_->topLevelItemCount(); ++i) filterItem(files_->topLevelItem(i), text);
@@ -560,7 +587,7 @@ void MainWindow::updateSelection() {
         const bool direct = std::any_of(result_.edges.begin(), result_.edges.end(), [&](const auto& edge) {
             return edge.includer == dependent && edge.included == file;
         });
-        item->setText(1, direct ? tr("прямо") : tr("косвенно"));
+        language::setItemText(item, 1, direct ? "прямо" : "косвенно");
         QStringList chain;
         if (const auto path = dependencyGraph_->shortestPath(dependent, file))
             for (const auto& step : *path) chain << pathText(step);
@@ -569,12 +596,13 @@ void MainWindow::updateSelection() {
     for (const auto& edge : result_.edges) {
         if (edge.includer != file) continue;
         auto* item = new QTreeWidgetItem(outgoing, {pathText(edge.included.filename()), tr("стр. %1").arg(edge.line)});
+        language::setItemText(item, 1, "стр. %1", {QString::number(edge.line)});
         item->setData(0, Qt::UserRole, pathText(edge.included)); item->setToolTip(0, pathText(edge.included));
     }
     for (auto* group : {incoming, outgoing}) {
         const int count = group->childCount();
-        group->setText(0, group->text(0) + QStringLiteral(" · %1").arg(count));
-        if (!count) new QTreeWidgetItem(group, {group == incoming ? tr("Нет зависимых файлов") : tr("Нет подключений")});
+        language::setItemText(group, 0, group == incoming ? "Зависимые файлы · %1" : "Включает напрямую · %1", {QString::number(count)});
+        if (!count) language::setItemText(new QTreeWidgetItem(group), 0, group == incoming ? "Нет зависимых файлов" : "Нет подключений");
         QFont bold = group->font(0); bold.setBold(true); group->setFont(0, bold);
         group->setFirstColumnSpanned(true); group->setFlags(Qt::ItemIsEnabled);
         for (int i = 0; i < group->childCount(); ++i) {
@@ -643,17 +671,19 @@ void MainWindow::showCycles(const std::vector<CycleDetails>& groups) {
     cycles_->clear();
     updateCycleFocus();
     GraphPlaceholder::EdgeColors edgeColors;
-    std::size_t cycleCount = 0;
+    cycleCount_ = 0;
     for (std::size_t i = 0; i < groups.size(); ++i) {
         const auto& [fileCount, chains] = groups[i];
         auto* group = new QTreeWidgetItem(cycles_, {tr("Группа %1 · файлов: %2 · циклов: %3")
                                                    .arg(i + 1).arg(fileCount).arg(chains.size())});
+        language::setItemText(group, 0, "Группа %1 · файлов: %2 · циклов: %3",
+            {QString::number(i + 1), QString::number(fileCount), QString::number(chains.size())});
         group->setFlags(Qt::ItemIsEnabled);
         auto groupFont = group->font(0);
         groupFont.setBold(true);
         group->setFont(0, groupFont);
         for (const auto& chain : chains) {
-            const auto color = cycleColor(cycleCount++);
+            const auto color = cycleColor(cycleCount_++);
             QStringList names, paths;
             for (const auto& step : chain) {
                 names << pathText(step.filename());
@@ -673,10 +703,11 @@ void MainWindow::showCycles(const std::vector<CycleDetails>& groups) {
     }
     if (groups.empty()) {
         auto* empty = new QTreeWidgetItem(cycles_, {tr("Циклов не найдено")});
+        language::setItemText(empty, 0, "Циклов не найдено");
         empty->setFlags(Qt::ItemIsEnabled);
     }
     cycles_->expandAll();
-    tabs_->setTabText(1, tr("Циклы (%1)").arg(cycleCount));
+    tabs_->setTabText(1, tr("Циклы (%1)").arg(cycleCount_));
     graph_->setCycleHighlights(std::move(edgeColors));
 }
 void MainWindow::updateCycleFocus() {
@@ -686,4 +717,60 @@ void MainWindow::updateCycleFocus() {
     const auto color = item ? item->data(0, CycleColor).value<QColor>() : QColor{};
     allCycles_->setEnabled(!files.isEmpty());
     graph_->focusCycle(files, color);
+}
+
+void MainWindow::changeEvent(QEvent* event) {
+    QMainWindow::changeEvent(event);
+    if (event->type() == QEvent::LanguageChange) retranslateUi();
+}
+void MainWindow::updateSummary() {
+    if (!analyze_->isEnabled()) {
+        summary_->setText(tr("Анализ проекта…"));
+        statusBar()->showMessage(tr("Анализ выполняется в фоне"));
+    } else if (!hasResult_) {
+        summary_->setText(tr("Выберите папку проекта и нажмите «Анализировать»."));
+        statusBar()->showMessage(tr("Готово"));
+    } else if (result_.status == headerscope::ScanStatus::failed) {
+        summary_->setText(tr("Анализ не выполнен. Подробности в диагностике."));
+        statusBar()->showMessage(tr("Ошибка анализа"));
+    } else {
+        const QString status = result_.status == headerscope::ScanStatus::partial ? tr("Частичный анализ") : tr("Анализ завершён");
+        summary_->setText(tr("%1 · %2 файлов · %3 директив #include · %4 циклических групп · %5 сообщений")
+            .arg(status).arg(result_.files.size()).arg(result_.edges.size()).arg(groupCount_).arg(result_.diagnostics.size()));
+        statusBar()->showMessage(status);
+    }
+}
+void MainWindow::retranslateUi() {
+    heading_->setText(tr("HeaderScope · зависимости C/C++"));
+    language_->setAccessibleName(tr("Язык")); language_->setToolTip(tr("Язык"));
+    project_->setPlaceholderText(tr("Папка проекта или compile_commands.json"));
+    project_->setAccessibleName(tr("Путь к проекту или базе команд"));
+    browse_->setText(tr("Папка…"));
+    analyze_->setText(analyze_->isEnabled() ? tr("Анализировать") : tr("Анализ…"));
+    export_->setText(tr("Экспорт графа…"));
+    fit_->setText(tr("Уместить граф"));
+    files_->setAccessibleName(tr("Файлы проекта"));
+    search_->setPlaceholderText(tr("Найти файл…"));
+    tabs_->setTabText(0, tr("Граф"));
+    tabs_->setTabText(1, dependencyGraph_ ? tr("Циклы (%1)").arg(cycleCount_) : tr("Циклы"));
+    tabs_->setTabText(2, tr("Проверка #include"));
+    dependencies_->setAccessibleName(tr("Подключения и зависимые файлы"));
+    cycles_->setAccessibleName(tr("Циклические группы"));
+    allCycles_->setText(tr("Показать все циклы"));
+    if (auto* toggle = findChild<QAbstractButton*>(QStringLiteral("themeToggle"))) toggle->setAccessibleName(tr("Тёмная тема"));
+    diagnostics_->setHeaderLabels({tr("Уровень"), tr("Сообщение"), tr("Файл"), tr("Строка")});
+    const auto* current = files_->currentItem();
+    if (!current || !current->data(0, Qt::UserRole).isValid()) selected_->setText(tr("Выберите файл"));
+    for (auto* label : findChildren<QLabel*>()) {
+        const auto source = label->property("translationSource");
+        if (source.isValid()) label->setText(language::text(source.toString().toUtf8().constData()));
+    }
+    for (auto* tree : {dependencies_, cycles_, diagnostics_})
+        for (QTreeWidgetItemIterator it(tree); *it; ++it) language::retranslateItem(*it);
+    for (int i = 0; i < diagnostics_->topLevelItemCount(); ++i) {
+        auto* row = diagnostics_->topLevelItem(i);
+        row->setText(1, language::diagnosticText(row->data(1, Qt::UserRole + 42).toString()));
+        row->setToolTip(1, row->text(1));
+    }
+    updateSummary();
 }

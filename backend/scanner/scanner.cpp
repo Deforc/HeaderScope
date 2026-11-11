@@ -11,6 +11,8 @@
 #include <clang/Tooling/JSONCompilationDatabase.h>
 #include <clang/Tooling/Tooling.h>
 #include <llvm/ADT/SmallString.h>
+#include <llvm/Support/FileSystem.h>
+#include <llvm/Support/Path.h>
 #include <llvm/Support/VirtualFileSystem.h>
 
 #include <algorithm>
@@ -21,6 +23,28 @@
 namespace headerscope {
 namespace {
 namespace fs = std::filesystem;
+
+std::string clangResourceDirectory()
+{
+    // Releases include the builtin headers next to the executable on Windows
+    // and in Contents/Resources on macOS. Local builds still use the LLVM SDK.
+    static int executableAnchor;
+    llvm::SmallString<256> path(llvm::sys::fs::getMainExecutable("", &executableAnchor));
+    if (!path.empty()) {
+        llvm::sys::path::remove_filename(path);
+#ifdef __APPLE__
+        llvm::sys::path::remove_filename(path);
+        llvm::sys::path::append(path, "Resources");
+#endif
+        llvm::sys::path::append(path, "clang", "include", "stddef.h");
+        if (llvm::sys::fs::exists(path)) {
+            llvm::sys::path::remove_filename(path);
+            llvm::sys::path::remove_filename(path);
+            return std::string(path);
+        }
+    }
+    return HEADERSCOPE_CLANG_RESOURCE_DIR;
+}
 
 fs::path normalize(fs::path path, const fs::path& base)
 {
@@ -196,7 +220,8 @@ ScanResult scanIncludes(const std::filesystem::path& compilationDatabase)
     // application's process cwd. In particular, relative -I paths remain valid.
     clang::tooling::ClangTool tool(*database, sources,
         std::make_shared<clang::PCHContainerOperations>(), llvm::vfs::createPhysicalFileSystem());
-    tool.appendArgumentsAdjuster([](const clang::tooling::CommandLineArguments& arguments,
+    tool.appendArgumentsAdjuster([resourceArg = "-resource-dir=" + clangResourceDirectory()](
+                                    const clang::tooling::CommandLineArguments& arguments,
                                     llvm::StringRef) {
         const bool specified = std::any_of(arguments.begin(), arguments.end(),
             [](const std::string& argument) {
@@ -204,8 +229,7 @@ ScanResult scanIncludes(const std::filesystem::path& compilationDatabase)
             });
         auto adjusted = arguments;
         if (!specified && !adjusted.empty())
-            adjusted.insert(adjusted.begin() + 1,
-                            "-resource-dir=" HEADERSCOPE_CLANG_RESOURCE_DIR);
+            adjusted.insert(adjusted.begin() + 1, resourceArg);
         return adjusted;
     });
     tool.setDiagnosticConsumer(&diagnostics);
