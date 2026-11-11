@@ -10,6 +10,7 @@
 #include <QComboBox>
 #include <QDir>
 #include <QFileDialog>
+#include <QFileIconProvider>
 #include <QFileInfo>
 #include <QHash>
 #include <QHeaderView>
@@ -140,6 +141,9 @@ QWidget* panel(const QString& title, QWidget* content, QWidget* extra = nullptr)
 
 void populateFileTree(QTreeWidget* tree, const std::vector<std::filesystem::path>& files, const QString& root) {
     QHash<QString, QTreeWidgetItem*> directories;
+    const QFileIconProvider icons;
+    const QIcon folderIcon = icons.icon(QAbstractFileIconProvider::Folder);
+    const QIcon fileIcon = icons.icon(QAbstractFileIconProvider::File);
     for (const auto& file : files) {
         const QStringList parts = relativeName(file, root).split(QLatin1Char('/'), Qt::SkipEmptyParts);
         QTreeWidgetItem* parent = nullptr;
@@ -150,6 +154,7 @@ void populateFileTree(QTreeWidget* tree, const std::vector<std::filesystem::path
             if (!directory) {
                 directory = parent ? new QTreeWidgetItem(parent, {parts[i]}) : new QTreeWidgetItem(tree, {parts[i]});
                 directory->setToolTip(0, key);
+                directory->setIcon(0, folderIcon);
             }
             parent = directory;
         }
@@ -157,6 +162,7 @@ void populateFileTree(QTreeWidget* tree, const std::vector<std::filesystem::path
         // Search matches the relative path, so typing a directory name finds the files inside it.
         auto* leaf = parent ? new QTreeWidgetItem(parent, {name}) : new QTreeWidgetItem(tree, {name});
         leaf->setData(0, Qt::UserRole, pathText(file)); leaf->setToolTip(0, pathText(file));
+        leaf->setIcon(0, fileIcon);
         leaf->setData(0, Qt::UserRole + 1, parts.join(QLatin1Char('/')));
     }
     tree->expandAll();
