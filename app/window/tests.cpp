@@ -242,7 +242,7 @@ private slots:
         const auto* main = edgeLine(window, "main.cpp", "a.h");
         QVERIFY(ab && ba && be && en && nb && main);
         const auto normalColor = ab->pen().color();
-        QCOMPARE(window.findChild<QLabel*>("tabBadge")->text(), QStringLiteral("2"));
+        QCOMPARE(window.findChild<QTabBar*>("viewTabs")->tabText(1), QStringLiteral("Циклы (2)"));
         auto* details = window.findChild<QStackedWidget*>("details");
         QCOMPARE(details->currentIndex(), 0);
         auto* tabs = window.findChild<QTabBar*>("viewTabs");

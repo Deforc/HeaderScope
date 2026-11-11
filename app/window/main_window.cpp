@@ -216,10 +216,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     tabs_->setObjectName(QStringLiteral("viewTabs"));
     tabs_->setDrawBase(false); tabs_->setExpanding(false);
     tabs_->addTab(tr("Граф")); tabs_->addTab(tr("Циклы")); tabs_->addTab(tr("Проверка #include"));
-    cycleBadge_ = new QLabel(QStringLiteral("0"));
-    cycleBadge_->setObjectName(QStringLiteral("tabBadge"));
-    cycleBadge_->setAlignment(Qt::AlignCenter); cycleBadge_->setMinimumSize(26, 20); // ponytail: fits 2 digits
-    tabs_->setTabButton(1, QTabBar::RightSide, cycleBadge_);
     auto* center = panel(tr("A → B означает: A подключает B"), graph_);
     static_cast<QVBoxLayout*>(center->layout())->insertWidget(0, tabs_, 0, Qt::AlignLeft);
     horizontal->addWidget(center);
@@ -383,7 +379,7 @@ void MainWindow::runAnalysis() {
     // Clear the old view so a failed scan cannot leave a stale graph on screen.
     result_ = {}; dependencyGraph_.reset(); files_->clear(); dependencies_->clear(); diagnostics_->clear(); cycles_->clear();
     updateCycleFocus();
-    selected_->setText(tr("Выберите файл")); selectedPath_->clear(); cycleBadge_->setText(QStringLiteral("0"));
+    selected_->setText(tr("Выберите файл")); selectedPath_->clear(); tabs_->setTabText(1, tr("Циклы"));
     graph_->setResult(result_);
     includer_->clear(); header_->clear(); checkInclude();
     summary_->setText(tr("Анализ проекта…"));
@@ -615,7 +611,7 @@ void MainWindow::showCycles(const std::vector<CycleDetails>& groups) {
         empty->setFlags(Qt::ItemIsEnabled);
     }
     cycles_->expandAll();
-    cycleBadge_->setText(QString::number(cycleCount));
+    tabs_->setTabText(1, tr("Циклы (%1)").arg(cycleCount));
     graph_->setCycleHighlights(std::move(edgeColors));
 }
 void MainWindow::updateCycleFocus() {

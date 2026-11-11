@@ -76,7 +76,6 @@ private:
     QLabel* selected_;
     QLabel* selectedPath_;
     QTabBar* tabs_;
-    QLabel* cycleBadge_;
     QStackedWidget* details_;
     QProgressBar* progress_;
     QFutureWatcher<AnalysisResult> watcher_;
