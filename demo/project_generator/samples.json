@@ -1,0 +1,79 @@
+{
+  "diamond": {
+    "targets": [
+      {"sources": ["src/main.cpp", "src/worker.cpp"], "include_dirs": ["include"]},
+      {"sources": ["src/isolated.cpp"]}
+    ],
+    "includes": {
+      "src/main.cpp": [
+        {"header": "include/left.h", "via": "include"},
+        {"header": "include/right.h", "via": "include"},
+        {"header": "include/right.h", "via": "include"}
+      ],
+      "src/worker.cpp": [{"header": "include/right.h", "via": "include"}],
+      "include/left.h": ["include/shared.h"],
+      "include/right.h": ["include/shared.h"]
+    }
+  },
+  "conditional": {
+    "targets": [
+      {"sources": ["main.cpp"], "defines": ["USE_FAST"]},
+      {"sources": ["main.cpp"], "defines": ["USE_PORTABLE"]}
+    ],
+    "includes": {
+      "main.cpp": [
+        {"header": "fast.h", "when": {"USE_FAST": true}},
+        {"header": "portable.h", "when": {"USE_FAST": false, "USE_PORTABLE": true}},
+        {"header": "fallback.h", "when": {"USE_FAST": false, "USE_PORTABLE": false}}
+      ]
+    }
+  },
+  "cycles": {
+    "targets": [{"sources": ["main.cpp"]}],
+    "includes": {
+      "main.cpp": ["a.h", "self.h"],
+      "a.h": ["b.h"],
+      "b.h": ["c.h"],
+      "c.h": ["a.h"],
+      "self.h": ["self.h"]
+    }
+  },
+  "split_cycle": {
+    "targets": [
+      {"sources": ["app/main.cpp"], "defines": ["ENABLE_CORE"]},
+      {"sources": ["tools/probe.cpp"], "defines": ["ENABLE_PLUGIN"]}
+    ],
+    "includes": {
+      "app/main.cpp": ["core/api.h"],
+      "tools/probe.cpp": ["plugins/api.h"],
+      "core/api.h": [
+        {"header": "plugins/api.h", "when": {"ENABLE_CORE": true}}
+      ],
+      "plugins/api.h": [
+        {"header": "core/api.h", "when": {"ENABLE_PLUGIN": true}},
+        {"header": "plugins/internal.h", "when": {"ENABLE_CORE": true, "ENABLE_PLUGIN": true}}
+      ]
+    }
+  },
+  "tangled": {
+    "targets": [
+      {"sources": ["app/main.cpp", "app/worker.cpp"], "defines": ["WITH_BACKLINK"]},
+      {"sources": ["tools/probe.cpp"]}
+    ],
+    "includes": {
+      "app/main.cpp": ["core/api.h", "plugins/api.h"],
+      "app/worker.cpp": ["plugins/api.h"],
+      "core/api.h": ["core/detail.h", "shared/types.h"],
+      "core/detail.h": [
+        "core/api.h",
+        {"header": "plugins/detail.h", "when": {"WITH_BACKLINK": true}}
+      ],
+      "plugins/api.h": ["plugins/detail.h", "shared/types.h"],
+      "plugins/detail.h": ["plugins/api.h", "core/detail.h"],
+      "shared/types.h": ["shared/config.h"],
+      "tools/probe.cpp": ["core/api.h", "tools/local.h"],
+      "tools/local.h": ["tools/detail.h"],
+      "tools/detail.h": ["tools/local.h"]
+    }
+  }
+}
