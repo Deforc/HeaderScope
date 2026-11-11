@@ -8,4 +8,14 @@ if(BUILD_TESTING)
     target_include_directories(headerscope_report_tests SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
     target_link_libraries(headerscope_report_tests PRIVATE HeaderScope::graph LLVMSupport)
     add_test(NAME reports COMMAND headerscope_report_tests)
+
+    find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    set(inspect_e2e_runner "${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e.py")
+    add_test(NAME inspect_e2e
+        COMMAND Python3::Interpreter "${inspect_e2e_runner}" workflow
+            "$<TARGET_FILE:headerscope_inspect>" "${CMAKE_CURRENT_BINARY_DIR}")
+    add_test(NAME inspect_e2e.graphs
+        COMMAND Python3::Interpreter "${inspect_e2e_runner}" graphs
+            "$<TARGET_FILE:headerscope_inspect>" "${CMAKE_CURRENT_BINARY_DIR}")
+    set_tests_properties(inspect_e2e inspect_e2e.graphs PROPERTIES TIMEOUT 60)
 endif()
