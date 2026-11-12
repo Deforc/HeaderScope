@@ -681,6 +681,27 @@ private slots:
         window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(0);
         QVERIFY(!proposedIncludeLine(window)); // The suggestion is drawn only on its own tab.
     }
+    void proposedIncludeKeepsPathAfterFileClick() {
+        MainWindow window;
+        window.show();
+        window.showResult(chain());
+        window.findChild<QTabBar*>("viewTabs")->setCurrentIndex(2);
+        auto* includer = window.findChild<QComboBox*>("checkIncluder");
+        auto* header = window.findChild<QComboBox*>("checkHeader");
+        header->setCurrentIndex(header->findText("main.cpp"));
+        auto* files = window.findChild<QTreeWidget*>("filesTree");
+        const auto rows = files->findItems(QStringLiteral("b.h"), Qt::MatchExactly | Qt::MatchRecursive);
+        QCOMPARE(rows.size(), 1);
+        files->scrollToItem(rows.front());
+        QCoreApplication::processEvents();
+        QTest::mouseClick(files->viewport(), Qt::LeftButton, Qt::NoModifier, files->visualItemRect(rows.front()).center());
+        QCOMPARE(includer->currentText(), QStringLiteral("b.h"));
+        QVERIFY(proposedIncludeLine(window));
+        QCOMPARE(proposedIncludeLine(window)->pen().color(), QColor("#ef4444"));
+        const auto* existingEdge = edgeLine(window, "main.cpp", "a.h");
+        QVERIFY(existingEdge);
+        QCOMPARE(existingEdge->pen().width(), 3);
+    }
     void proposedIncludeRecognizesExistingEdge() {
         MainWindow window;
         auto result = chain();

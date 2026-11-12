@@ -411,7 +411,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(files_, &QTreeWidget::currentItemChanged, this, &MainWindow::updateSelection);
     connect(files_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem* item) {
         const auto file = item->data(0, Qt::UserRole);
-        if (file.isValid()) graph_->selectFile(nativePath(file.toString()));
+        if (!file.isValid()) return;
+        graph_->selectFile(nativePath(file.toString()));
+        if (tabs_->currentIndex() == 2) checkInclude();
     });
     connect(search_, &QLineEdit::textChanged, this, &MainWindow::filterFiles);
     connect(fit_, &QPushButton::clicked, graph_, &GraphPlaceholder::fitGraph);
