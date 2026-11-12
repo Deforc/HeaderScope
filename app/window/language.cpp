@@ -7,6 +7,17 @@
 namespace {
 const QHash<QString, QString>& translations() {
     static const QHash<QString, QString> values = {
+        {QStringLiteral("Папка · %1 файлов"), QStringLiteral("Folder · %1 files")},
+        {QStringLiteral("Группировать по папкам"), QStringLiteral("Group by folder")},
+        {QStringLiteral("Свернуть всё"), QStringLiteral("Collapse all")},
+        {QStringLiteral("Двойной щелчок раскрывает папку. Правая кнопка — свернуть родительскую папку."), QStringLiteral("Double-click to expand a folder. Right-click to collapse its parent folder.")},
+        {QStringLiteral("Файлы в корне"), QStringLiteral("Root files")},
+        {QStringLiteral("%1\nФайлов: %2 · связей внутри: %3\nДвойной щелчок — раскрыть папку"), QStringLiteral("%1\nFiles: %2 · internal links: %3\nDouble-click to expand the folder")},
+        {QStringLiteral("%1 файлов · %2 связей внутри"), QStringLiteral("%1 files · %2 internal links")},
+        {QStringLiteral("Связей #include: %1"), QStringLiteral("#include links: %1")},
+        {QStringLiteral("Раскрыть папку"), QStringLiteral("Expand folder")},
+        {QStringLiteral("Свернуть родительскую папку"), QStringLiteral("Collapse parent folder")},
+        {QStringLiteral("Свернуть все папки"), QStringLiteral("Collapse all folders")},
         {QStringLiteral("Язык"), QStringLiteral("Language")},
         {QStringLiteral("HeaderScope · зависимости C/C++"), QStringLiteral("HeaderScope · C/C++ dependencies")},
         {QStringLiteral("Папка проекта или compile_commands.json"), QStringLiteral("Project folder or compile_commands.json")},
