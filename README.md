@@ -1,40 +1,59 @@
 # HeaderScope
 
-HeaderScope — приложение для macOS / Windows на C++ и Qt, которое анализирует связи `#include` в проектах на C/C++. Оно показывает, какие файлы зависят от выбранного заголовка, находит циклы и помогает проверить, создаст ли новое подключение цикл.
+HeaderScope анализирует зависимости `#include` в проектах на C и C++. Настольное приложение на Qt для Windows и macOS показывает интерактивный граф с группировкой по папкам, находит циклы и проверяет, создаст ли новое подключение цикл. Консольная утилита `headerscope_inspect` выводит отчёты, сравнивает снимки анализа и ранжирует заголовки по числу зависимых исходников. Граф можно экспортировать в JSON или Mermaid.
 
 ## Быстрый старт
 
-Для сборки приложения нужны компилятор с C++20, CMake 3.21+ и Qt 6.5+ с модулем Qt Widgets. Для включения сборщика дополнительно нужны LLVM/Clang 18+ с библиотеками LibTooling. Команды ниже рассчитаны на запуск из корня репозитория.
+Оба варианта собирают приложение и консольную утилиту со сканером Clang LibTooling. Выполняйте команды сборки из корня клонированного репозитория. Минимальные версии зависимостей — CMake 3.21, Qt 6.5 и LLVM/Clang 18. Для сборки нужен компилятор с поддержкой C++20, для тестов — Python 3.9 или новее.
+
+### macOS
+
+Установите инструменты командной строки Xcode командой `xcode-select --install`, если они ещё не установлены. Для установки CMake, LLVM и Python понадобится [Homebrew](https://brew.sh/). Выберите настольный комплект macOS в [Qt Online Installer](https://doc.qt.io/qt-6/get-and-install-qt.html). В примере используется Qt 6.9.3. Если вы выбрали другую версию или каталог установки, укажите путь к своему комплекту в `QT_ROOT_DIR`.
 
 ```sh
-cmake -S . -B build
-cmake --build build
+brew install cmake llvm@18 python
+QT_ROOT_DIR="$HOME/Qt/6.9.3/macos"
+cmake -S . -B build-macos -G "Unix Makefiles" \
+  -DCMAKE_BUILD_TYPE=Release -DHEADERSCOPE_BUILD_SCANNER=ON \
+  -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR;$(brew --prefix llvm@18)"
+cmake --build build-macos --parallel
+ctest --test-dir build-macos --output-on-failure
+open build-macos/app/window/HeaderScope.app
 ```
 
-Если CMake не находит Qt, добавьте при конфигурации `-DCMAKE_PREFIX_PATH=/путь/к/Qt`. Укажите каталог нужного комплекта Qt для вашего компилятора и архитектуры.
+Консольная утилита доступна по пути `build-macos/demo/inspect/headerscope_inspect`.
 
-На macOS запустите `open build/app/window/HeaderScope.app` при сборке генератором по умолчанию. На Windows файл `HeaderScope.exe` находится в `build/app/window/` или в его подкаталоге конфигурации, например `Debug`.
+### Windows x64
 
-Без Qt можно собирать бэкенд и общие демоданные отдельно:
+Установите [MSYS2](https://www.msys2.org/) и откройте терминал **MSYS2 CLANG64**. Обновите пакеты командой `pacman -Syu`. Если MSYS2 попросит закрыть терминал, снова откройте **MSYS2 CLANG64** и повторите обновление.
+
+```bash
+pacman -S --needed mingw-w64-clang-x86_64-{clang,clang-tools-extra,llvm,lld,cmake,ninja,python,qt6-base}
+cmake -S . -B build-windows -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DHEADERSCOPE_BUILD_SCANNER=ON \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_PREFIX_PATH="$(cygpath -am "$MINGW_PREFIX")"
+cmake --build build-windows --parallel
+ctest --test-dir build-windows --output-on-failure
+./build-windows/app/window/HeaderScope.exe
+```
+
+Консольная утилита доступна по пути `build-windows/demo/inspect/headerscope_inspect.exe`. Запускайте оба файла из **MSYS2 CLANG64**, чтобы были доступны библиотеки из этого окружения.
+
+В приложении выберите `compile_commands.json` своего проекта или создайте его по инструкции для [демопроекта](#демопроект). Управление графом и проверка нового подключения описаны в [документации приложения](app/window/README.md).
+
+Чтобы собрать только ядро графа без Qt и Clang, выполните команды ниже.
 
 ```sh
-cmake -S . -B build-core -DHEADERSCOPE_BUILD_APP=OFF
+cmake -S . -B build-core -DHEADERSCOPE_BUILD_APP=OFF -DHEADERSCOPE_BUILD_SCANNER=OFF
 cmake --build build-core
 ```
-
-Главное окно позволяет выбрать проект или `compile_commands.json`, запустить анализ
-в фоне, просматривать файлы, прямые подключения, зависимые файлы и диагностику.
-Без Clang доступны три деморежима: цепочка подключений, цикл и частичный анализ с
-ошибкой заголовка. Временное представление графа встроено в окно; точка подключения
-полноценного виджета и сценарий проверки описаны в [инструкции окна](app/window/README.md).
-Для реального анализа включите `HEADERSCOPE_BUILD_SCANNER=ON`. Ядро графа и сборщик
-также можно проверять через консольный прототип `headerscope_inspect`.
 
 ## Выпуск релиза
 
 Готовая сборка для Mac требует macOS 15 или новее и процессор Apple Silicon.
 
-После добавления рабочих процессов в основную ветку создайте и отправьте тег версии:
+Создайте тег версии на нужном коммите основной ветки и отправьте его на GitHub.
 
 ```sh
 git tag v1.0.0
@@ -53,7 +72,7 @@ git push origin v1.0.0
 
 ## Демопроект
 
-Соберите небольшой проект `main.cpp → a.h → b.h`. На macOS можно использовать стандартный генератор CMake. Если на Windows используется Visual Studio, добавьте к первой команде `-G Ninja` и запускайте её в окружении с настроенным компилятором.
+Соберите небольшой проект `main.cpp → a.h → b.h`. На macOS команды ниже используют стандартный генератор CMake. На Windows выполняйте их в **MSYS2 CLANG64** и добавьте к первой команде `-G Ninja -DCMAKE_CXX_COMPILER=clang++`, чтобы CMake записал базу команд компиляции.
 
 ```sh
 cmake -S demo/include-chain -B build-demo
@@ -62,12 +81,13 @@ cmake --build build-demo
 
 Файл `build-demo/compile_commands.json` можно передать сборщику. Чтобы проверить условное подключение `a.h → extra.h`, повторите конфигурацию с `-DHEADERSCOPE_DEMO_EXTRA=ON`.
 
-## Консольный прототип анализа
+## Анализ в терминале
 
-Для сборщика нужны LLVM/Clang 18+ с библиотеками LibTooling. На macOS их можно установить командой `brew install llvm@18`; для поиска библиотек добавьте к конфигурации CMake `-DCMAKE_PREFIX_PATH="$(brew --prefix llvm@18)"`. Для другого комплекта LLVM можно задать `LLVM_DIR` и `Clang_DIR` — каталоги с файлами `LLVMConfig.cmake` и `ClangConfig.cmake`.
+Быстрый старт уже собирает `headerscope_inspect` вместе с приложением. Для отдельной сборки CLI задайте `LLVM_PREFIX="$(brew --prefix llvm@18)"` на macOS или `LLVM_PREFIX="$(cygpath -am "$MINGW_PREFIX")"` в терминале **MSYS2 CLANG64**. На Windows добавьте к первой команде `-G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++`.
 
 ```sh
-cmake -S . -B build-inspect -DHEADERSCOPE_BUILD_APP=OFF -DHEADERSCOPE_BUILD_SCANNER=ON
+cmake -S . -B build-inspect -DHEADERSCOPE_BUILD_APP=OFF \
+  -DHEADERSCOPE_BUILD_SCANNER=ON -DCMAKE_PREFIX_PATH="$LLVM_PREFIX"
 cmake --build build-inspect
 build-inspect/demo/inspect/headerscope_inspect --help
 build-inspect/demo/inspect/headerscope_inspect --version
@@ -139,7 +159,7 @@ ctest --test-dir build-inspect -R '^inspect_e2e' --output-on-failure
 
 Сборщик возвращает активные подключения из команд компиляции, объединяя одинаковые директивы между исходниками. Системные заголовки исключены. Ошибки Clang передаются в `diagnostics`, а доступные связи сохраняются со статусом `partial`. Для локальной сборки встроенные заголовки берутся из комплекта LLVM, выбранного при сборке; в релизном архиве они уже включены. Связи внутри готовых PCH/модулей не восстанавливаются.
 
-Прототип показывает связи с номерами строк, все простые циклы по группам и кратчайшие цепочки от зависимых файлов до выбранного заголовка. Вкладка «Проверка #include» отвечает, замкнёт ли новое подключение цикл, и показывает причину на графе. Для проверки настоящего цикла повторите конфигурацию демопроекта с `-DHEADERSCOPE_DEMO_CYCLE=ON` и запустите анализ повторно.
+Консольная утилита показывает связи с номерами строк, все простые циклы по группам и кратчайшие цепочки от зависимых файлов до выбранного заголовка. Вкладка «Проверка #include» в приложении отвечает, замкнёт ли новое подключение цикл, и показывает причину на графе. Для проверки существующего цикла повторите конфигурацию демопроекта с `-DHEADERSCOPE_DEMO_CYCLE=ON` и запустите анализ повторно.
 
 ## Сравнение анализов и рейтинг заголовков
 
