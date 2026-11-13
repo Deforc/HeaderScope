@@ -273,7 +273,7 @@ private slots:
     void folderControlsKeepOverviewAndTranslate() {
         QTemporaryDir project;
         QVERIFY(project.isValid());
-        const auto root = nativePath(project.path());
+        const auto root = std::filesystem::canonical(nativePath(project.path()));
         headerscope::ScanResult result;
         result.status = headerscope::ScanStatus::complete;
         result.files = {root / "src/main.cpp", root / "include/api.h"};
@@ -323,7 +323,7 @@ private slots:
     void folderDependenciesAndGraphSelection() {
         QTemporaryDir project;
         QVERIFY(project.isValid());
-        const auto root = nativePath(project.path());
+        const auto root = std::filesystem::canonical(nativePath(project.path()));
         headerscope::ScanResult result;
         result.status = headerscope::ScanStatus::complete;
         result.files = {root / "app/main.cpp", root / "core/api.h", root / "core/detail.h",
