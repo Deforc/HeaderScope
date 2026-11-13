@@ -25,6 +25,13 @@ set_target_properties(headerscope_app PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER io.github.deforc.headerscope
 )
 
+if(APPLE)
+    set(app_icon icons/HeaderScope.icns)
+    set_source_files_properties("${app_icon}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    target_sources(headerscope_app PRIVATE "${app_icon}")
+    set_target_properties(headerscope_app PROPERTIES MACOSX_BUNDLE_ICON_FILE HeaderScope.icns)
+endif()
+
 install(TARGETS headerscope_app BUNDLE DESTINATION . RUNTIME DESTINATION .)
 if(HEADERSCOPE_BUILD_SCANNER)
     if(APPLE)
