@@ -29,7 +29,11 @@ if(APPLE)
     set(app_icon icons/HeaderScope.icns)
     set_source_files_properties("${app_icon}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
     target_sources(headerscope_app PRIVATE "${app_icon}")
-    set_target_properties(headerscope_app PROPERTIES MACOSX_BUNDLE_ICON_FILE HeaderScope.icns)
+    set_target_properties(headerscope_app PROPERTIES
+        MACOSX_BUNDLE_ICON_FILE HeaderScope.icns
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+    )
 endif()
 
 install(TARGETS headerscope_app BUNDLE DESTINATION . RUNTIME DESTINATION .)
